@@ -179,7 +179,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     color: #ffffff !important;
 }
 .stDownloadButton > button {
-    background: #5371ad !important;
+    background: #1a2f5e !important;
     color: #ffffff !important;
     border: none !important;
     border-radius: 6px !important;
@@ -188,7 +188,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     width: 100%;
 }
 .stDownloadButton > button:hover {
-    background: ##30446b !important;
+    background: #0f1f42 !important;
 }
 
 /* ── Tabs ────────────────────────────────────────────────────────────── */
@@ -526,8 +526,8 @@ BANK_COLORS = {
     "Discovery Invest - Payments": "#c8102e",
 }
 
-# Discovery banks that support section-type selection in the confirmation panel
-DISCOVERY_BANKS = {"Discovery Invest"}
+# Banks that always produce digital text-layer PDFs — never route to vision mode
+FORCE_TEXT_MODE = {"Discovery Invest", "Discovery Invest - Payments"}
 
 # Banks whose output includes a Reference (Fund Name) column in the CSV
 BANKS_WITH_REFERENCE = {"Discovery Invest"}
@@ -1121,7 +1121,8 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
             effective_bank = file_data.get('effective_bank', confirmed_bank)
             section_label  = file_data.get('section_label', '')
 
-            scanned = is_scanned_pdf(pdf_bytes)
+            # Discovery Invest PDFs are always digital — skip scanned detection
+            scanned = False if effective_bank in FORCE_TEXT_MODE else is_scanned_pdf(pdf_bytes)
             if scanned:
                 status.markdown(
                     f"Processing **{file_data['name']}** ({i + 1}/{total_files}) "
