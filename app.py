@@ -16,163 +16,179 @@ st.set_page_config(
 # ─── CUSTOM CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Cormorant+Garamond:wght@400;600;700&family=Inter:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
-/* ── Base ─────────────────────────────────────────────────────────────── */
+/* ── Base — white body matching logo background ───────────────────────── */
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
-    background-color: #0c0f1a;
-    color: #c8d0e0;
+    background-color: #f5f6f8;
+    color: #1a2f5e;
 }
-.stApp { background-color: #0c0f1a; }
-h1, h2, h3 { font-family: 'Cormorant Garamond', serif; color: #ffffff; }
+.stApp { background-color: #f5f6f8; }
+h1, h2, h3, h4 {
+    font-family: 'Cormorant Garamond', serif;
+    color: #1a2f5e;
+}
 
-/* ── Header banner ───────────────────────────────────────────────────── */
+/* ── Header — pure white so logo blends seamlessly ───────────────────── */
 .eli-header {
-    background: linear-gradient(135deg, #0d1428 0%, #111827 60%, #0c0f1a 100%);
-    border-bottom: 1px solid #2a3a5a;
-    padding: 20px 32px 18px 32px;
+    background: #ffffff;
+    border-bottom: 3px solid #1a2f5e;
+    padding: 18px 36px;
     margin: -1rem -1rem 2rem -1rem;
     display: flex;
     align-items: center;
-    gap: 28px;
+    gap: 24px;
+    box-shadow: 0 2px 12px rgba(26,47,94,0.08);
 }
-.eli-logo img { height: 54px; width: auto; }
+.eli-logo img  { height: 60px; width: auto; }
+.eli-divider   { width: 1px; height: 52px; background: #8a9ab8; margin: 0 8px; opacity: 0.5; }
 .eli-title-block { display: flex; flex-direction: column; justify-content: center; }
 .eli-title {
     font-family: 'Cormorant Garamond', serif;
-    font-size: 26px; font-weight: 700;
-    color: #ffffff; margin: 0;
-    letter-spacing: 0.5px;
+    font-size: 30px; font-weight: 700;
+    color: #1a2f5e; margin: 0; letter-spacing: 0.5px;
 }
 .eli-subtitle {
-    font-size: 10px; color: #6a80a8;
-    letter-spacing: 2.5px; text-transform: uppercase;
-    margin-top: 4px;
-}
-.eli-divider {
-    width: 1px; height: 44px;
-    background: #2a3a5a; margin: 0 4px;
+    font-size: 10px; color: #8a9ab8;
+    letter-spacing: 2.5px; text-transform: uppercase; margin-top: 4px;
 }
 
 /* ── Stat cards ──────────────────────────────────────────────────────── */
 .stat-card {
-    background: #0f1525;
-    border: 1px solid #1e2d4a;
+    background: #ffffff;
+    border: 1px solid #d0d8e8;
+    border-top: 3px solid #1a2f5e;
     border-radius: 8px; padding: 16px; text-align: center;
+    box-shadow: 0 2px 8px rgba(26,47,94,0.06);
 }
-.stat-number { font-size: 28px; color: #7a9fd4; font-weight: 600; }
-.stat-label {
-    font-size: 10px; color: #4a5a78;
-    letter-spacing: 2px; text-transform: uppercase; margin-top: 4px;
-}
+.stat-number { font-size: 28px; color: #1a2f5e; font-weight: 700; }
+.stat-label  { font-size: 10px; color: #8a9ab8; letter-spacing: 2px; text-transform: uppercase; margin-top: 4px; }
 
 /* ── Cost card ───────────────────────────────────────────────────────── */
 .cost-card {
-    background: #0f1525; border: 1px solid #1e2d4a;
+    background: #ffffff; border: 1px solid #d0d8e8;
+    border-left: 4px solid #1a2f5e;
     border-radius: 8px; padding: 12px 16px; margin-top: 8px;
+    box-shadow: 0 2px 8px rgba(26,47,94,0.06);
 }
-.cost-label { font-size: 10px; color: #4a5a78; letter-spacing: 2px; text-transform: uppercase; }
-.cost-value { font-size: 15px; color: #7a9fd4; font-weight: 500; margin-top: 2px; }
-.cost-note  { font-size: 10px; color: #2a3a5a; margin-top: 4px; }
+.cost-label { font-size: 10px; color: #8a9ab8; letter-spacing: 2px; text-transform: uppercase; }
+.cost-value { font-size: 15px; color: #1a2f5e; font-weight: 600; margin-top: 2px; }
+.cost-note  { font-size: 10px; color: #8a9ab8; margin-top: 4px; }
 
 /* ── POPIA notice ────────────────────────────────────────────────────── */
 .popia-notice {
-    background: #0a0f1e; border: 1px solid #1a2a4a;
+    background: #eef1f7;
+    border: 1px solid #c0cce0;
+    border-left: 4px solid #1a2f5e;
     border-radius: 8px; padding: 12px 16px; margin-bottom: 18px;
 }
-.popia-title {
-    font-size: 10px; color: #4a7abf;
-    letter-spacing: 2px; text-transform: uppercase; font-weight: 500;
-}
-.popia-text { font-size: 11px; color: #4a6a9a; margin-top: 5px; line-height: 1.65; }
+.popia-title { font-size: 10px; color: #1a2f5e; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; }
+.popia-text  { font-size: 11px; color: #3a5080; margin-top: 5px; line-height: 1.65; }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 div[data-testid="stSidebar"] {
-    background-color: #0a0d18 !important;
-    border-right: 1px solid #1a2540 !important;
+    background-color: #ffffff !important;
+    border-right: 2px solid #d0d8e8 !important;
 }
-div[data-testid="stSidebar"] * { color: #c8d0e0 !important; }
-div[data-testid="stSidebar"] .stMarkdown p { color: #c8d0e0 !important; }
+div[data-testid="stSidebar"] .stMarkdown p  { color: #1a2f5e !important; }
+div[data-testid="stSidebar"] .stMarkdown h1,
+div[data-testid="stSidebar"] .stMarkdown h2,
+div[data-testid="stSidebar"] .stMarkdown h3,
+div[data-testid="stSidebar"] .stMarkdown h4 { color: #1a2f5e !important; }
+div[data-testid="stSidebar"] .stCaption p   { color: #6a80a8 !important; }
+div[data-testid="stSidebar"] hr             { border-color: #d0d8e8 !important; }
 
-/* ── Selectbox / dropdowns — readable text ───────────────────────────── */
+/* ── Selectbox / dropdowns — navy text on white ──────────────────────── */
 div[data-baseweb="select"] > div {
-    background-color: #0f1525 !important;
-    border-color: #2a3a5a !important;
-    color: #c8d0e0 !important;
+    background-color: #ffffff !important;
+    border: 1px solid #b0bdd4 !important;
+    border-radius: 6px !important;
 }
-div[data-baseweb="select"] span { color: #c8d0e0 !important; }
-div[data-baseweb="popover"] { background-color: #0f1525 !important; }
-div[data-baseweb="menu"] { background-color: #0f1525 !important; }
-div[data-baseweb="menu"] li { color: #c8d0e0 !important; background-color: #0f1525 !important; }
-div[data-baseweb="menu"] li:hover { background-color: #1a2d4a !important; }
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div,
+div[data-baseweb="select"] input { color: #1a2f5e !important; }
+div[data-baseweb="popover"],
+div[data-baseweb="menu"]         { background-color: #ffffff !important; border: 1px solid #d0d8e8 !important; }
+li[role="option"]                { background-color: #ffffff !important; color: #1a2f5e !important; }
+li[role="option"]:hover          { background-color: #eef1f7 !important; }
 
 /* ── Radio buttons ───────────────────────────────────────────────────── */
-div[data-testid="stRadio"] label { color: #c8d0e0 !important; }
-div[data-testid="stRadio"] p { color: #c8d0e0 !important; }
+div[data-testid="stRadio"] label p { color: #1a2f5e !important; }
+div[data-testid="stRadio"] p       { color: #1a2f5e !important; }
 
 /* ── Number inputs ───────────────────────────────────────────────────── */
 div[data-testid="stNumberInput"] input {
-    background-color: #0f1525 !important;
-    color: #c8d0e0 !important;
-    border-color: #2a3a5a !important;
+    background-color: #ffffff !important;
+    color: #1a2f5e !important;
+    border: 1px solid #b0bdd4 !important;
 }
-div[data-testid="stNumberInput"] label { color: #c8d0e0 !important; }
+div[data-testid="stNumberInput"] label p { color: #1a2f5e !important; }
 
 /* ── Expander ────────────────────────────────────────────────────────── */
 div[data-testid="stExpander"] {
-    background-color: #0f1525 !important;
-    border-color: #1e2d4a !important;
+    background-color: #ffffff !important;
+    border: 1px solid #d0d8e8 !important;
+    border-radius: 8px !important;
 }
-div[data-testid="stExpander"] summary { color: #c8d0e0 !important; }
-div[data-testid="stExpander"] p { color: #c8d0e0 !important; }
-
-/* ── Buttons ─────────────────────────────────────────────────────────── */
-.stButton > button {
-    background: #0f1a30; color: #7a9fd4;
-    border: 1px solid #2a3a6a;
-    border-radius: 6px; font-family: 'Inter', sans-serif;
-    font-size: 13px; letter-spacing: 0.3px; transition: all 0.2s;
-}
-.stButton > button:hover {
-    background: #1a2d50; border-color: #5a80b4; color: #ffffff;
-}
-.stDownloadButton > button {
-    background: #1a3a6a !important; color: #ffffff !important;
-    border: 1px solid #2a4a7a !important;
-    border-radius: 6px !important;
-    font-family: 'Inter', sans-serif !important;
-    width: 100%;
-}
-.stDownloadButton > button:hover {
-    background: #2a4a8a !important;
-    border-color: #5a80b4 !important;
-}
+div[data-testid="stExpander"] summary p { color: #1a2f5e !important; }
+div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
 
 /* ── File uploader ───────────────────────────────────────────────────── */
 [data-testid="stFileUploader"] section {
     min-height: 180px;
     display: flex; align-items: center; justify-content: center;
-    border: 2px dashed #2a3a5a !important;
+    border: 2px dashed #b0bdd4 !important;
     border-radius: 10px !important;
-    background: #0f1525 !important;
+    background: #ffffff !important;
     transition: border-color 0.2s;
 }
-[data-testid="stFileUploader"] section:hover { border-color: #5a80b4 !important; }
+[data-testid="stFileUploader"] section:hover { border-color: #1a2f5e !important; }
 [data-testid="stFileUploader"] section > div { padding: 32px 0; }
-[data-testid="stFileUploader"] label { color: #c8d0e0 !important; }
+[data-testid="stFileUploader"] label p       { color: #1a2f5e !important; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.stButton > button {
+    background: #ffffff; color: #1a2f5e;
+    border: 1.5px solid #1a2f5e;
+    border-radius: 6px; font-family: 'Inter', sans-serif;
+    font-size: 13px; font-weight: 500;
+    letter-spacing: 0.3px; transition: all 0.2s;
+}
+.stButton > button:hover {
+    background: #1a2f5e !important;
+    color: #ffffff !important;
+}
+.stDownloadButton > button {
+    background: #1a2f5e !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    width: 100%;
+}
+.stDownloadButton > button:hover {
+    background: #0f1f42 !important;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────── */
+button[data-baseweb="tab"]                        { color: #8a9ab8 !important; font-family: 'Inter', sans-serif !important; }
+button[data-baseweb="tab"][aria-selected="true"]  { color: #1a2f5e !important; border-bottom-color: #1a2f5e !important; }
 
 /* ── Dataframe ───────────────────────────────────────────────────────── */
-div[data-testid="stDataFrame"] { border: 1px solid #1e2d4a !important; border-radius: 8px; }
+div[data-testid="stDataFrame"] { border: 1px solid #d0d8e8 !important; border-radius: 8px; }
 
-/* ── Tab styling ─────────────────────────────────────────────────────── */
-button[data-baseweb="tab"] { color: #8090b0 !important; }
-button[data-baseweb="tab"][aria-selected="true"] { color: #7a9fd4 !important; border-bottom-color: #7a9fd4 !important; }
+/* ── General text ────────────────────────────────────────────────────── */
+p, li, span, label               { color: #1a2f5e; }
+.stCaption p                     { color: #6a80a8 !important; }
+.stMarkdown p                    { color: #1a2f5e; }
 
-/* ── Captions and general text ───────────────────────────────────────── */
-.stCaption { color: #6a7a9a !important; }
-p { color: #c8d0e0; }
-label { color: #c8d0e0 !important; }
+/* ── Info / warning / success / error boxes ──────────────────────────── */
+div[data-testid="stAlert"]       { border-radius: 8px !important; }
+
+/* ── Section headings ────────────────────────────────────────────────── */
+.stMarkdown h4 { color: #1a2f5e !important; font-family: 'Cormorant Garamond', serif !important; font-size: 20px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1623,3 +1639,4 @@ with tab_history:
                     key=f"hist_all_{hi}"
                 )
             st.markdown("---")
+        
