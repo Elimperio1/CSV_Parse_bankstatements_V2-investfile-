@@ -102,7 +102,7 @@ div[data-testid="stSidebar"] hr    { border-color: #d0d8e8 !important; }
 [data-testid="stFileUploader"] button,
 [data-testid="stFileUploaderDropzone"] button {
     background: #1a2f5e !important;
-    color: #ffffff !important;
+    color: #c28a8a !important;
     border: none !important;
     border-radius: 6px !important;
     font-family: 'Inter', sans-serif !important;
