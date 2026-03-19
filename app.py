@@ -683,7 +683,8 @@ def _parse_raw_json(raw: str) -> list:
     start = raw.find('[')
     end   = raw.rfind(']')
     if start == -1 or end == -1:
-        raise ValueError("No JSON array found in Claude response")
+        preview = raw.strip()[:400] if raw.strip() else "(empty response)"
+        raise ValueError(f"No JSON array found in Claude response. First 400 chars: {preview}")
     return json.loads(raw[start:end + 1])
 
 CHUNK_SIZE = 8  # pages per API call when splitting large PDFs
