@@ -101,8 +101,8 @@ div[data-testid="stSidebar"] hr    { border-color: #d0d8e8 !important; }
 /* ── Browse files button inside uploader ─────────────────────────────── */
 [data-testid="stFileUploader"] button,
 [data-testid="stFileUploaderDropzone"] button {
-    background: ##b6c5e3 !important;
-    color: #c28a8a !important;
+    background: #b6c5e3 !important;
+    color: #011847 !important;
     border: none !important;
     border-radius: 6px !important;
     font-family: 'Inter', sans-serif !important;
