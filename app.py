@@ -526,6 +526,9 @@ BANK_COLORS = {
     "Discovery Invest - Payments": "#c8102e",
 }
 
+# Discovery banks that support section-type selection in the confirmation panel
+DISCOVERY_BANKS = {"Discovery Invest"}
+
 # Banks that always produce digital text-layer PDFs — never route to vision mode
 FORCE_TEXT_MODE = {"Discovery Invest", "Discovery Invest - Payments"}
 
