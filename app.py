@@ -856,7 +856,9 @@ def build_rows(raw: list, bank: str) -> list:
         date      = normalise_date(r.get('date', ''))
         details   = str(r.get('details', '')).strip()
         amount    = float(r.get('amount', 0) or 0)
-        reference = str(r.get('reference', '')).strip()  # populated for Discovery Invest
+        reference = str(r.get('reference', '')).strip()
+        if reference:
+            details = f"{details} / {reference}"
 
         if bank == "Capitec":
             fee = float(r.get('fee', 0) or 0)
@@ -889,27 +891,11 @@ def deduplicate_rows(rows: list) -> list:
     return result
 
 def rows_to_csv_bytes(rows: list) -> bytes:
-    """
-    Generate CSV bytes from processed rows.
-    Automatically includes the 'Reference' column when any row has a non-empty reference
-    (i.e. Discovery Invest rows). Pure bank rows get a 3-column CSV.
-    Mixed sessions get a 4-column CSV with blank references for non-Discovery rows.
-    """
-    has_ref = any(r.get('reference', '') for r in rows)
-    output  = io.StringIO()
-    writer  = csv.writer(output)
-
-    if has_ref:
-        writer.writerow(['Date', 'Details', 'Amount', 'Reference'])
-        for row in rows:
-            writer.writerow([
-                row['date'], row['details'], row['amount'], row.get('reference', '')
-            ])
-    else:
-        writer.writerow(['Date', 'Details', 'Amount'])
-        for row in rows:
-            writer.writerow([row['date'], row['details'], row['amount']])
-
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Date', 'Details', 'Amount'])
+    for row in rows:
+        writer.writerow([row['date'], row['details'], row['amount']])
     return output.getvalue().encode('utf-8')
 
 def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
@@ -1657,18 +1643,14 @@ with tab_results:
             st.markdown("---")
             st.markdown("#### Preview")
             preview_rows = st.session_state.all_rows[:50]
-            has_ref      = any(r.get('reference', '') for r in preview_rows)
             table_data   = []
             for r in preview_rows:
                 amt = r['amount']
-                row_dict = {
+                table_data.append({
                     'Date':    r['date'],
                     'Details': r['details'],
                     'Amount':  f"+{amt}" if isinstance(amt, (int, float)) and amt > 0 else str(amt),
-                }
-                if has_ref:
-                    row_dict['Reference'] = r.get('reference', '')
-                table_data.append(row_dict)
+                })
             if table_data:
                 st.dataframe(table_data, use_container_width=True, height=400)
                 if len(st.session_state.all_rows) > 50:
