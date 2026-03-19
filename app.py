@@ -292,6 +292,39 @@ INCLUDE:
 - Rows with very small amounts (e.g. "R-0.20") are real fee transactions — include them.
 
 Return ONLY the JSON array, nothing else.""",
+
+"Discovery Invest - Payments": """You are a bank statement parser. Your ONLY output must be a valid JSON array. No explanation, no markdown, no code fences, no preamble, no postamble — just the raw JSON array starting with [ and ending with ].
+
+TASK: Extract every row from the Payment Summary table in this Discovery Invest statement.
+
+THE TABLE HAS EXACTLY THESE COLUMNS (in order):
+  Date | Description | Gross amount | Interest | Net payment
+
+CRITICAL: You must ONLY extract from the "Payment Summary" table. Ignore any other tables on the same pages (e.g. Transaction details, Capital Gains, Portfolio summary).
+
+Each object must have exactly these keys:
+- "date": string DD/MM/YYYY — the Date column is already in DD/MM/YYYY format. Output as-is.
+- "details": string — the Description column value, verbatim.
+- "amount": number — use ONLY the Net payment column. Strip the leading "R", remove all spaces and commas.
+  ALL amounts must be output as NEGATIVE numbers because these are withdrawals leaving the account.
+  Examples:
+    "R10 000.00" → -10000.00
+    "R1 234.56"  → -1234.56
+    "R0.00"      → skip this row (zero payment, see below)
+
+AMOUNT RULES:
+- Net payment values are always positive in the table (e.g. "R10 000.00") — output them ALL as NEGATIVE.
+- Ignore the Gross amount column entirely.
+- Ignore the Interest column entirely.
+
+SKIP THESE ROWS ENTIRELY:
+- The column header row (Date / Description / Gross amount / etc.)
+- The "Payment summary as at..." header line
+- Any row where Net payment is "R0.00", blank, or missing
+- Any totals, subtotals, or summary rows at the bottom of the table
+- Any page header or footer lines
+
+Return ONLY the JSON array, nothing else.""",
 }
 
 # ─── BANK PROMPTS (VISION / SCANNED PDF OVERRIDES) ───────────────────────────
@@ -344,14 +377,18 @@ Return ONLY the JSON array, nothing else.""",
 # ─── BANK CONFIG ──────────────────────────────────────────────────────────────
 
 BANK_COLORS = {
-    "Capitec":          "#007b5e",
-    "Investec":         "#003366",
-    "FNB":              "#cc0000",
-    "ABSA":             "#cc0000",
-    "Nedbank":          "#007b3e",
-    "Standard Bank":    "#0033a0",
-    "Discovery Invest": "#c8102e",
+    "Capitec":                     "#007b5e",
+    "Investec":                    "#003366",
+    "FNB":                         "#cc0000",
+    "ABSA":                        "#cc0000",
+    "Nedbank":                     "#007b3e",
+    "Standard Bank":               "#0033a0",
+    "Discovery Invest":            "#c8102e",
+    "Discovery Invest - Payments": "#c8102e",
 }
+
+# Discovery banks that support section-type selection in the confirmation panel
+DISCOVERY_BANKS = {"Discovery Invest"}
 
 # Banks whose output includes a Reference (Fund Name) column in the CSV
 BANKS_WITH_REFERENCE = {"Discovery Invest"}
@@ -690,7 +727,39 @@ def rows_to_csv_bytes(rows: list) -> bytes:
 
     return output.getvalue().encode('utf-8')
 
-def get_month_key(date_str: str) -> str:
+def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
+    """
+    Build a descriptive CSV filename from bank name, section type, and the
+    date range of the extracted rows.
+    e.g. Discovery_Invest_Transactions_15Sep2025_to_03Oct2025.csv
+    """
+    # Parse dates from rows
+    parsed_dates = []
+    for r in rows:
+        d = r.get('date', '')
+        if d:
+            try:
+                parts = d.split('/')
+                parsed_dates.append(datetime(int(parts[2]), int(parts[1]), int(parts[0])))
+            except Exception:
+                pass
+
+    if parsed_dates:
+        min_d = min(parsed_dates).strftime("%d%b%Y")
+        max_d = max(parsed_dates).strftime("%d%b%Y")
+        date_range = f"{min_d}_to_{max_d}"
+    else:
+        date_range = "unknown_dates"
+
+    # Sanitise bank name for use in a filename
+    bank_safe    = bank.replace(" - Payments", "").replace(" ", "_")
+    section_safe = section_label.replace(" ", "_") if section_label else ""
+
+    if section_safe:
+        return f"{bank_safe}_{section_safe}_{date_range}.csv"
+    return f"{bank_safe}_{date_range}.csv"
+
+
     if not date_str:
         return 'Unknown'
     parts = date_str.split('/')
@@ -705,16 +774,16 @@ def get_month_key(date_str: str) -> str:
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 
 defaults = {
-    'processed_files':      [],
-    'all_rows':             [],
-    'confirmed_bank':       None,
-    'confirmed_files':      [],
-    'history':              [],
-    'cached_upload_bytes':  {},
-    'uploader_key':         0,
-    'session_input_tokens': 0,
-    'session_output_tokens':0,
-    'processed_hashes':     {},   # {sha256_hex: filename_that_was_processed}
+    'processed_files':       [],
+    'all_rows':              [],
+    'confirmed_bank':        None,
+    'confirmed_files':       [],
+    'history':               [],
+    'cached_upload_bytes':   {},
+    'uploader_key':          0,
+    'session_input_tokens':  0,
+    'session_output_tokens': 0,
+    'processed_hashes':      {},   # {sha256_hex: filename_that_was_processed}
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -748,7 +817,9 @@ with st.sidebar:
 
     if selected_bank == "Discovery Invest":
         st.markdown("**Discovery Invest**")
-        st.caption("Columns extracted: Effective date · Description · Amount · Fund Name. Units column is stripped.")
+        st.caption("Transaction Details: Date · Description · Amount · Fund Name. Units column stripped.")
+        st.caption("Payment Summary: Date · Description · Net Payment (as negative withdrawal).")
+        st.caption("Select the section type in the confirmation panel before processing.")
         st.markdown("---")
 
     st.markdown("**Pastel tip**")
@@ -899,6 +970,10 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 stream_status.caption(f"Trimmed to pages {ps}–{pe}. Sending to Claude...")
 
             # ── Scanned vs text-layer routing ────────────────────────────
+            # Use effective_bank (may differ from confirmed_bank for Discovery sections)
+            effective_bank = file_data.get('effective_bank', confirmed_bank)
+            section_label  = file_data.get('section_label', '')
+
             scanned = is_scanned_pdf(pdf_bytes)
             if scanned:
                 status.markdown(
@@ -909,19 +984,19 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 timing.caption(f"{eta_label}  |  Vision mode (~45s per file)")
                 try:
                     raw, inp_tok, out_tok = extract_transactions_vision(
-                        pdf_bytes, confirmed_bank, stream_status=stream_status
+                        pdf_bytes, effective_bank, stream_status=stream_status
                     )
                     vision_used = True
                 except Exception as ve:
                     raise ValueError(f"VISION_FAILED: {ve}")
             else:
                 raw, inp_tok, out_tok = extract_transactions(
-                    pdf_bytes, confirmed_bank, stream_status=stream_status
+                    pdf_bytes, effective_bank, stream_status=stream_status
                 )
                 vision_used = False
 
             # ── Post-process rows ─────────────────────────────────────────
-            rows     = build_rows(raw, confirmed_bank)
+            rows     = build_rows(raw, effective_bank)
             rows     = deduplicate_rows(rows)
             fee_rows = sum(1 for r in rows if r['details'] == 'Service Fee')
             txn_rows = len(rows) - fee_rows
@@ -940,6 +1015,9 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
             file_hash = get_file_hash(file_data['bytes'])
             st.session_state.processed_hashes[file_hash] = file_data['name']
 
+            # ── Build descriptive CSV filename ────────────────────────────
+            csv_filename = build_csv_filename(effective_bank, section_label, rows)
+
             stream_status.caption(
                 f"Done — {txn_rows} transactions in {elapsed_file}s  ·  "
                 f"${cost_usd:.4f} / R{cost_zar:.4f}  ·  "
@@ -947,20 +1025,24 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
             )
 
             st.session_state.processed_files.append({
-                'name':          file_data['name'],
-                'bank':          confirmed_bank,
-                'rows':          rows,
-                'txn_count':     txn_rows,
-                'fee_count':     fee_rows,
-                'status':        'done',
-                'vision':        vision_used,
-                'elapsed':       elapsed_file,
-                'input_tokens':  inp_tok,
-                'output_tokens': out_tok,
-                'cost_usd':      cost_usd,
-                'cost_zar':      cost_zar,
-                'sanity_warn':   sanity_warn,
-                'page_range':    f"{ps}–{pe}" if page_clipped else None,
+                'name':           file_data['name'],
+                'bank':           confirmed_bank,
+                'effective_bank': effective_bank,
+                'section_label':  section_label,
+                'csv_filename':   csv_filename,
+                'rows':           rows,
+                'txn_count':      txn_rows,
+                'fee_count':      fee_rows,
+                'status':         'done',
+                'vision':         vision_used,
+                'elapsed':        elapsed_file,
+                'input_tokens':   inp_tok,
+                'output_tokens':  out_tok,
+                'cost_usd':       cost_usd,
+                'cost_zar':       cost_zar,
+                'sanity_warn':    sanity_warn,
+                'page_range':     f"{ps}–{pe}" if page_clipped else None,
+                'total_pages':    tp,
             })
             st.session_state.all_rows.extend(rows)
 
@@ -977,17 +1059,21 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 st.error(f"**{file_data['name']}** — {error_msg}")
 
             st.session_state.processed_files.append({
-                'name':          file_data['name'],
-                'bank':          confirmed_bank,
-                'rows':          [],
-                'status':        'error',
-                'error':         error_msg,
-                'input_tokens':  0,
-                'output_tokens': 0,
-                'cost_usd':      0.0,
-                'cost_zar':      0.0,
-                'sanity_warn':   False,
-                'page_range':    None,
+                'name':           file_data['name'],
+                'bank':           confirmed_bank,
+                'effective_bank': file_data.get('effective_bank', confirmed_bank),
+                'section_label':  file_data.get('section_label', ''),
+                'csv_filename':   file_data['name'].replace('.pdf', '_error.csv'),
+                'rows':           [],
+                'status':         'error',
+                'error':          error_msg,
+                'input_tokens':   0,
+                'output_tokens':  0,
+                'cost_usd':       0.0,
+                'cost_zar':       0.0,
+                'sanity_warn':    False,
+                'page_range':     None,
+                'total_pages':    file_data.get('total_pages', 0),
             })
 
         progress.progress((i + 1) / total_files)
@@ -1095,7 +1181,43 @@ elif uploaded_files:
                 "Switch the bank in the sidebar, or confirm below to proceed anyway."
             )
 
-        # ── Page range selector (only shown for large documents) ──────────
+        # ── Section type selector — Discovery Invest only ─────────────────
+        section_label = ""
+        effective_bank = selected_bank  # prompt key actually used
+
+        if selected_bank in DISCOVERY_BANKS:
+            st.markdown("**Which section of the PDF are you processing?**")
+            section_choice = st.radio(
+                "Section type",
+                options=["Transaction Details", "Payment Summary"],
+                index=0,
+                horizontal=True,
+                key="section_type_radio",
+                label_visibility="collapsed",
+                help=(
+                    "Transaction Details → Effective date · Description · Amount · Fund Name  |  "
+                    "Payment Summary → Date · Description · Net Payment (negative withdrawals)"
+                )
+            )
+            section_label  = section_choice.replace(" ", "_")
+            effective_bank = (
+                "Discovery Invest - Payments"
+                if section_choice == "Payment Summary"
+                else "Discovery Invest"
+            )
+            if section_choice == "Payment Summary":
+                st.caption(
+                    "Net payment amounts will be saved as **negative** values "
+                    "(withdrawals leaving the account). No Fund Name column."
+                )
+            else:
+                st.caption(
+                    "Transaction amounts use the sign in the statement. "
+                    "Fund Name saved in the **Reference** column."
+                )
+            st.markdown("")
+
+
         max_pages = max(fm['pages'] for fm in file_meta)
         page_info = {fm['name']: fm['pages'] for fm in file_meta}
 
@@ -1155,11 +1277,13 @@ elif uploaded_files:
                 for fm in file_meta:
                     tp = fm['pages']
                     confirmed_file_list.append({
-                        'name':        fm['name'],
-                        'bytes':       fm['bytes'],
-                        'page_start':  page_start_val,
-                        'page_end':    min(page_end_val, tp),
-                        'total_pages': tp,
+                        'name':          fm['name'],
+                        'bytes':         fm['bytes'],
+                        'page_start':    page_start_val,
+                        'page_end':      min(page_end_val, tp),
+                        'total_pages':   tp,
+                        'effective_bank':effective_bank,
+                        'section_label': section_label,
                     })
                 st.session_state.confirmed_bank  = selected_bank
                 st.session_state.confirmed_files = confirmed_file_list
@@ -1204,8 +1328,12 @@ with tab_results:
                         f"  ·  ${f.get('cost_usd', 0):.4f} / R{f.get('cost_zar', 0):.4f}"
                         if f.get('cost_usd') else ""
                     )
+                    section_tag = (
+                        f" [{f['section_label'].replace('_', ' ')}]"
+                        if f.get('section_label') else ""
+                    )
                     st.success(
-                        f"**{f['name']}** [{bank_label}]{vision_tag}{page_tag} — "
+                        f"**{f['name']}** [{bank_label}]{section_tag}{vision_tag}{page_tag} — "
                         f"{f['txn_count']} transactions{fee_info} = {len(f['rows'])} total"
                         f"{elapsed_tag}{cost_tag}"
                     )
@@ -1223,10 +1351,11 @@ with tab_results:
             with col_b:
                 if f['status'] == 'done':
                     csv_bytes = rows_to_csv_bytes(f['rows'])
+                    dl_fname  = f.get('csv_filename') or f['name'].replace('.pdf', '.csv')
                     st.download_button(
                         "Download CSV",
                         data=csv_bytes,
-                        file_name=f['name'].replace('.pdf', '.csv'),
+                        file_name=dl_fname,
                         mime='text/csv',
                         key=f"dl_{idx}_{f['name']}"
                     )
@@ -1355,11 +1484,12 @@ with tab_history:
                         f"{f['txn_count']} transactions{fee_info}{cost_tag}"
                     )
                 with col_b:
-                    hist_csv = rows_to_csv_bytes(f['rows'])
+                    hist_csv  = rows_to_csv_bytes(f['rows'])
+                    hist_fname = f.get('csv_filename') or f['name'].replace('.pdf', '.csv')
                     st.download_button(
                         "Download CSV",
                         data=hist_csv,
-                        file_name=f['name'].replace('.pdf', '.csv'),
+                        file_name=hist_fname,
                         mime='text/csv',
                         key=f"hist_{hi}_{fi}_{f['name']}"
                     )
