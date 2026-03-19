@@ -88,7 +88,7 @@ h1, h2, h3, h4 {
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 div[data-testid="stSidebar"] {
-    background-color: #ffffff !important;
+    background-color: #c28a8a !important;
     border-right: 2px solid #d0d8e8 !important;
 }
 div[data-testid="stSidebar"],
