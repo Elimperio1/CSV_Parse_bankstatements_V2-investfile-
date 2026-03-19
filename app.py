@@ -92,7 +92,7 @@ div[data-testid="stSidebar"] {
     border-right: 2px solid #d0d8e8 !important;
 }
 div[data-testid="stSidebar"],
-div[data-testid="stSidebar"] * { color: #ffffff  !important; }
+div[data-testid="stSidebar"] * { color: #1a2f5e !important; }
 div[data-testid="stSidebar"] .stCaption,
 div[data-testid="stSidebar"] .stCaption p,
 div[data-testid="stSidebar"] small { color: #6a80a8 !important; }
@@ -175,11 +175,11 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     letter-spacing: 0.3px; transition: all 0.2s;
 }
 .stButton > button:hover {
-    background: #bdc8de !important;
+    background: #1a2f5e !important;
     color: #ffffff !important;
 }
 .stDownloadButton > button {
-    background: ###5371ad !important;
+    background: #5371ad !important;
     color: #ffffff !important;
     border: none !important;
     border-radius: 6px !important;
@@ -188,7 +188,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     width: 100%;
 }
 .stDownloadButton > button:hover {
-    background: #bdc8de !important;
+    background: ##30446b !important;
 }
 
 /* ── Tabs ────────────────────────────────────────────────────────────── */
@@ -1368,40 +1368,88 @@ elif uploaded_files:
         max_pages = max(fm['pages'] for fm in file_meta)
         page_info = {fm['name']: fm['pages'] for fm in file_meta}
 
-        page_start_val = 1
-        page_end_val   = max_pages
+        # Discovery Invest: page range MANDATORY — blank defaults, confirm locked.
+        # All other banks: optional expander, defaults to full document.
+        discovery_mode = selected_bank in DISCOVERY_BANKS
+        range_ready    = False  # will be set to True when conditions are met
 
-        if max_pages > 8:
-            with st.expander(
-                f"📄 Page range — trim large documents "
-                f"(largest file: {max_pages} pages, optional)"
-            ):
-                if len(file_meta) > 1:
-                    for fname, n in page_info.items():
-                        st.caption(f"{fname}: {n} page{'s' if n != 1 else ''}")
-                col_ps, col_pe = st.columns(2)
-                with col_ps:
-                    page_start_val = st.number_input(
-                        "Start page", min_value=1, max_value=max_pages,
-                        value=1, step=1, key="page_start_input"
-                    )
-                with col_pe:
-                    page_end_val = st.number_input(
-                        "End page", min_value=1, max_value=max_pages,
-                        value=max_pages, step=1, key="page_end_input"
-                    )
-                if page_start_val > page_end_val:
-                    st.error("Start page must be ≤ end page.")
-                else:
-                    pages_in_range = page_end_val - page_start_val + 1
-                    if pages_in_range < max_pages:
-                        skip_pct = round((1 - pages_in_range / max_pages) * 100)
-                        st.caption(
-                            f"Will process pages {page_start_val}–{page_end_val} of each file "
-                            f"(~{skip_pct}% fewer pages sent to API, lower cost)."
+        if discovery_mode:
+            st.markdown("**Page range — required for Discovery Invest**")
+            st.caption(
+                f"This document has **{max_pages} pages**. "
+                "Enter a start and end page before processing to avoid sending "
+                "the entire document to the API (which causes a request-too-large error)."
+            )
+            col_ps, col_pe = st.columns(2)
+            with col_ps:
+                page_start_raw = st.number_input(
+                    "Start page", min_value=1, max_value=max_pages,
+                    value=None, step=1, key="page_start_input",
+                    placeholder="e.g. 10"
+                )
+            with col_pe:
+                page_end_raw = st.number_input(
+                    "End page", min_value=1, max_value=max_pages,
+                    value=None, step=1, key="page_end_input",
+                    placeholder="e.g. 25"
+                )
+
+            page_start_val = int(page_start_raw) if page_start_raw is not None else None
+            page_end_val   = int(page_end_raw)   if page_end_raw   is not None else None
+
+            if page_start_val is None or page_end_val is None:
+                st.warning("⚠ Enter both a start and end page to enable the Confirm button.")
+                range_ready = False
+            elif page_start_val > page_end_val:
+                st.error("Start page must be ≤ end page.")
+                range_ready = False
+            else:
+                pages_in_range = page_end_val - page_start_val + 1
+                skip_pct = round((1 - pages_in_range / max_pages) * 100)
+                st.caption(
+                    f"Will process pages {page_start_val}–{page_end_val} "
+                    f"({pages_in_range} page{'s' if pages_in_range != 1 else ''}, "
+                    f"~{skip_pct}% of document)."
+                )
+                range_ready = True
+
+        else:
+            page_start_val = 1
+            page_end_val   = max_pages
+            range_ready    = True
+
+            if max_pages > 8:
+                with st.expander(
+                    f"📄 Page range — trim large documents "
+                    f"(largest file: {max_pages} pages, optional)"
+                ):
+                    if len(file_meta) > 1:
+                        for fname, n in page_info.items():
+                            st.caption(f"{fname}: {n} page{'s' if n != 1 else ''}")
+                    col_ps, col_pe = st.columns(2)
+                    with col_ps:
+                        page_start_val = st.number_input(
+                            "Start page", min_value=1, max_value=max_pages,
+                            value=1, step=1, key="page_start_input"
                         )
+                    with col_pe:
+                        page_end_val = st.number_input(
+                            "End page", min_value=1, max_value=max_pages,
+                            value=max_pages, step=1, key="page_end_input"
+                        )
+                    if page_start_val > page_end_val:
+                        st.error("Start page must be ≤ end page.")
+                        range_ready = False
                     else:
-                        st.caption("Full document will be processed (no trimming).")
+                        pages_in_range = page_end_val - page_start_val + 1
+                        if pages_in_range < max_pages:
+                            skip_pct = round((1 - pages_in_range / max_pages) * 100)
+                            st.caption(
+                                f"Will process pages {page_start_val}–{page_end_val} "
+                                f"(~{skip_pct}% fewer pages sent to API, lower cost)."
+                            )
+                        else:
+                            st.caption("Full document will be processed (no trimming).")
 
         # ── Cost and POPIA reminders ──────────────────────────────────────
         st.info(
@@ -1414,7 +1462,7 @@ elif uploaded_files:
         col_confirm, col_cancel = st.columns(2)
 
         with col_confirm:
-            confirm_disabled = (page_start_val > page_end_val)
+            confirm_disabled = not range_ready
             if st.button(
                 f"Confirm — process as {selected_bank}",
                 use_container_width=True,
