@@ -655,19 +655,41 @@ def extract_transactions_vision(pdf_bytes, bank, stream_status=None):
 
     raw = ""
     chunk_count = 0
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=16000,
-        messages=[{"role": "user", "content": content_blocks}]
-    ) as stream:
-        for text in stream.text_stream:
-            raw += text
-            chunk_count += 1
-            if stream_status and chunk_count % 50 == 0:
-                stream_status.caption(f"Receiving response (vision) — {chunk_count} chunks so far...")
-        final_msg = stream.get_final_message()
-        input_tokens  = final_msg.usage.input_tokens
-        output_tokens = final_msg.usage.output_tokens
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw = ""
+            chunk_count = 0
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=16000,
+                messages=[{"role": "user", "content": content_blocks}]
+            ) as stream:
+                for text in stream.text_stream:
+                    raw += text
+                    chunk_count += 1
+                    if stream_status and chunk_count % 50 == 0:
+                        stream_status.caption(f"Receiving response (vision) — {chunk_count} chunks so far...")
+                final_msg = stream.get_final_message()
+                input_tokens  = final_msg.usage.input_tokens
+                output_tokens = final_msg.usage.output_tokens
+            break  # success — exit retry loop
+
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = "429" in err_str or "rate_limit" in err_str
+            if is_rate_limit and attempt < max_retries:
+                wait_secs = 65
+                for remaining in range(wait_secs, 0, -1):
+                    if stream_status:
+                        stream_status.caption(
+                            f"Rate limit hit (vision) — retrying in {remaining}s "
+                            f"(attempt {attempt}/{max_retries})..."
+                        )
+                    time.sleep(1)
+            else:
+                raise
 
     if stream_status:
         stream_status.caption(
@@ -709,33 +731,53 @@ def split_pdf_bytes(pdf_bytes: bytes, chunk_size: int = CHUNK_SIZE) -> list:
     return chunks
 
 def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: str = ""):
-    """Stream a single PDF (base64) through Claude. Returns (raw_text, input_tokens, output_tokens)."""
+    """Stream a single PDF (base64) through Claude. Returns (raw_text, input_tokens, output_tokens).
+    Automatically retries up to 3 times on rate limit (429) errors with a 60s wait."""
     client = get_client()
-    raw = ""
-    chunk_count = 0
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=16000,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "document",
-                    "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}
-                },
-                {"type": "text", "text": prompt}
-            ]
-        }]
-    ) as stream:
-        for text in stream.text_stream:
-            raw += text
-            chunk_count += 1
-            if stream_status and chunk_count % 50 == 0:
-                stream_status.caption(f"Receiving{chunk_label} — {chunk_count} chunks so far...")
-        final_msg = stream.get_final_message()
-        input_tokens  = final_msg.usage.input_tokens
-        output_tokens = final_msg.usage.output_tokens
-    return raw, input_tokens, output_tokens
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw = ""
+            chunk_count = 0
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=16000,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}
+                        },
+                        {"type": "text", "text": prompt}
+                    ]
+                }]
+            ) as stream:
+                for text in stream.text_stream:
+                    raw += text
+                    chunk_count += 1
+                    if stream_status and chunk_count % 50 == 0:
+                        stream_status.caption(f"Receiving{chunk_label} — {chunk_count} chunks so far...")
+                final_msg = stream.get_final_message()
+                input_tokens  = final_msg.usage.input_tokens
+                output_tokens = final_msg.usage.output_tokens
+            return raw, input_tokens, output_tokens
+
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = "429" in err_str or "rate_limit" in err_str
+            if is_rate_limit and attempt < max_retries:
+                wait_secs = 65
+                for remaining in range(wait_secs, 0, -1):
+                    if stream_status:
+                        stream_status.caption(
+                            f"Rate limit hit{chunk_label} — retrying in {remaining}s "
+                            f"(attempt {attempt}/{max_retries})..."
+                        )
+                    time.sleep(1)
+            else:
+                raise
 
 def extract_transactions(pdf_bytes: bytes, bank: str, stream_status=None):
     """
