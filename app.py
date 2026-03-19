@@ -92,7 +92,7 @@ div[data-testid="stSidebar"] {
     border-right: 2px solid #d0d8e8 !important;
 }
 div[data-testid="stSidebar"],
-div[data-testid="stSidebar"] * { color: #1a2f5e !important; }
+div[data-testid="stSidebar"] * { color: #ffffff  !important; }
 div[data-testid="stSidebar"] .stCaption,
 div[data-testid="stSidebar"] .stCaption p,
 div[data-testid="stSidebar"] small { color: #6a80a8 !important; }
