@@ -188,7 +188,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     width: 100%;
 }
 .stDownloadButton > button:hover {
-    background: #0f1f42 !important;
+    background: #bdc8de !important;
 }
 
 /* ── Tabs ────────────────────────────────────────────────────────────── */
