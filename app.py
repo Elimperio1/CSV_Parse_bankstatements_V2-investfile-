@@ -175,11 +175,11 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     letter-spacing: 0.3px; transition: all 0.2s;
 }
 .stButton > button:hover {
-    background: #1a2f5e !important;
+    background: #bdc8de !important;
     color: #ffffff !important;
 }
 .stDownloadButton > button {
-    background: #1a2f5e !important;
+    background: ###5371ad !important;
     color: #ffffff !important;
     border: none !important;
     border-radius: 6px !important;
