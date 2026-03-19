@@ -91,13 +91,32 @@ div[data-testid="stSidebar"] {
     background-color: #ffffff !important;
     border-right: 2px solid #d0d8e8 !important;
 }
-div[data-testid="stSidebar"] .stMarkdown p  { color: #1a2f5e !important; }
-div[data-testid="stSidebar"] .stMarkdown h1,
-div[data-testid="stSidebar"] .stMarkdown h2,
-div[data-testid="stSidebar"] .stMarkdown h3,
-div[data-testid="stSidebar"] .stMarkdown h4 { color: #1a2f5e !important; }
-div[data-testid="stSidebar"] .stCaption p   { color: #6a80a8 !important; }
-div[data-testid="stSidebar"] hr             { border-color: #d0d8e8 !important; }
+div[data-testid="stSidebar"],
+div[data-testid="stSidebar"] * { color: #1a2f5e !important; }
+div[data-testid="stSidebar"] .stCaption,
+div[data-testid="stSidebar"] .stCaption p,
+div[data-testid="stSidebar"] small { color: #6a80a8 !important; }
+div[data-testid="stSidebar"] hr    { border-color: #d0d8e8 !important; }
+
+/* ── Browse files button inside uploader ─────────────────────────────── */
+[data-testid="stFileUploader"] button,
+[data-testid="stFileUploaderDropzone"] button {
+    background: #1a2f5e !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    padding: 8px 20px !important;
+}
+[data-testid="stFileUploader"] button:hover,
+[data-testid="stFileUploaderDropzone"] button:hover {
+    background: #0f1f42 !important;
+    color: #ffffff !important;
+}
+[data-testid="stFileUploader"] p,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] small { color: #6a80a8 !important; }
 
 /* ── Selectbox / dropdowns — navy text on white ──────────────────────── */
 div[data-baseweb="select"] > div {
@@ -1639,4 +1658,3 @@ with tab_history:
                     key=f"hist_all_{hi}"
                 )
             st.markdown("---")
-        
