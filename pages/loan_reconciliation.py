@@ -19,7 +19,12 @@ FORMATS = {
 
 def load_and_normalise(uploaded_file, fmt, company_label):
     try:
-        df = pd.read_csv(uploaded_file, dtype=str)
+        # Sage CSVs often start with a `sep=,` hint line for Excel — detect and skip it
+        raw = uploaded_file.read().decode("utf-8", errors="replace")
+        uploaded_file.seek(0)
+        first_line = raw.splitlines()[0].strip().lower()
+        skip = 1 if first_line.startswith("sep=") else 0
+        df = pd.read_csv(uploaded_file, dtype=str, skiprows=skip)
     except Exception as e:
         st.error(f"{company_label}: Could not read CSV — {e}")
         return None
