@@ -2,15 +2,6 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-# ─────────────────────────────────────────────
-#  PAGE CONFIG
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="Loan Reconciliation",
-    page_icon="🔄",
-    layout="wide",
-)
-
 st.title("🔄 Intercompany Loan Reconciliation")
 st.caption("Upload one loan ledger per company. Matching is done on amount (exact) and date (±3 days).")
 
@@ -27,11 +18,6 @@ FORMATS = {
 # ─────────────────────────────────────────────
 
 def load_and_normalise(uploaded_file, fmt, company_label):
-    """
-    Load a Sage or Pastel CSV and return a clean DataFrame with columns:
-        date | description | debit | credit
-    Skips header/metadata rows by filtering on rows that contain a valid DD/MM/YYYY date.
-    """
     try:
         df = pd.read_csv(uploaded_file, dtype=str)
     except Exception as e:
@@ -47,7 +33,6 @@ def load_and_normalise(uploaded_file, fmt, company_label):
         )
         return None
 
-    # Keep only rows that look like real transaction dates (DD/MM/YYYY)
     mask = df[date_col].str.strip().str.match(r"^\d{2}/\d{2}/\d{4}$", na=False)
     df = df[mask].copy()
 
@@ -64,14 +49,6 @@ def load_and_normalise(uploaded_file, fmt, company_label):
 
 
 def reconcile(df_a, df_b, tolerance=3):
-    """
-    Two-pass matching:
-      Pass 1 — exact date + exact amount  → Confirmed match
-      Pass 2 — ±tolerance days + exact amount → Uncertain match
-
-    A Debit in A  ↔  Credit in B  (same amount)
-    A Credit in A ↔  Debit in B   (same amount)
-    """
     a = df_a.copy()
     b = df_b.copy()
     a["_used"] = False
@@ -108,7 +85,6 @@ def reconcile(df_a, df_b, tolerance=3):
             if candidates:
                 candidates.sort(key=lambda x: x[1])
                 j, day_diff = candidates[0]
-
                 a.at[i, "_used"] = True
                 b.at[j, "_used"] = True
 
@@ -195,7 +171,7 @@ def to_excel(confirmed, uncertain, unmatched_a, unmatched_b, name_a, name_b):
 
 
 # ─────────────────────────────────────────────
-#  SIDEBAR — UPLOAD & SETTINGS
+#  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -217,7 +193,7 @@ with st.sidebar:
     run_btn = st.button("▶ Run Reconciliation", type="primary", use_container_width=True)
 
 # ─────────────────────────────────────────────
-#  MAIN — RESULTS
+#  MAIN
 # ─────────────────────────────────────────────
 if not run_btn:
     st.info("Upload both CSV files in the sidebar and click **Run Reconciliation** to begin.")
@@ -237,16 +213,15 @@ if df_a is None or df_b is None:
 with st.spinner("Matching transactions…"):
     confirmed, uncertain, unmatched_a, unmatched_b = reconcile(df_a, df_b, date_tolerance)
 
-# ── Summary strip ──────────────────────────────
+# Summary
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("✅ Confirmed Matches",       len(confirmed))
-c2.metric("⚠️ Uncertain Matches",       len(uncertain))
-c3.metric(f"❌ Unmatched in {name_a}",  len(unmatched_a))
-c4.metric(f"❌ Unmatched in {name_b}",  len(unmatched_b))
+c1.metric("✅ Confirmed Matches",      len(confirmed))
+c2.metric("⚠️ Uncertain Matches",      len(uncertain))
+c3.metric(f"❌ Unmatched in {name_a}", len(unmatched_a))
+c4.metric(f"❌ Unmatched in {name_b}", len(unmatched_b))
 
 st.divider()
 
-# ── Download button ────────────────────────────
 excel_bytes = to_excel(confirmed, uncertain, unmatched_a, unmatched_b, name_a, name_b)
 st.download_button(
     label="⬇️ Download Full Report (Excel)",
@@ -257,14 +232,12 @@ st.download_button(
 
 st.divider()
 
-# ── Confirmed Matches ──────────────────────────
 with st.expander(f"✅ Confirmed Matches  ({len(confirmed)})", expanded=True):
     if confirmed:
         st.dataframe(matches_to_df(confirmed), use_container_width=True, hide_index=True)
     else:
         st.write("No confirmed matches found.")
 
-# ── Uncertain Matches ──────────────────────────
 with st.expander(f"⚠️ Uncertain Matches — review these  ({len(uncertain)})", expanded=True):
     if uncertain:
         df_unc = matches_to_df(uncertain)
@@ -276,7 +249,6 @@ with st.expander(f"⚠️ Uncertain Matches — review these  ({len(uncertain)})
     else:
         st.write("No uncertain matches.")
 
-# ── Unmatched A ────────────────────────────────
 with st.expander(f"❌ Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True):
     if not unmatched_a.empty:
         df_ua = unmatched_to_df(unmatched_a, name_b)
@@ -288,7 +260,6 @@ with st.expander(f"❌ Unmatched in {name_a}  ({len(unmatched_a)})", expanded=Tr
     else:
         st.write(f"All {name_a} transactions matched.")
 
-# ── Unmatched B ────────────────────────────────
 with st.expander(f"❌ Unmatched in {name_b}  ({len(unmatched_b)})", expanded=True):
     if not unmatched_b.empty:
         df_ub = unmatched_to_df(unmatched_b, name_a)
