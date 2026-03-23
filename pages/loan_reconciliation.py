@@ -273,18 +273,95 @@ def unmatched_to_df(df, missing_in):
     return pd.DataFrame(rows)
 
 
+ACCT_FMT = 'R #,##0.00'
+
+
+def autofit_columns(ws):
+    """Set each column width to fit the longest value in that column."""
+    for col in ws.columns:
+        max_len = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                max_len = max(max_len, len(str(cell.value or "")))
+            except Exception:
+                pass
+        ws.column_dimensions[col_letter].width = min(max_len + 4, 60)
+
+
 def write_highlighted_sheet(writer, export_df, status_series, sheet_name):
+    """Write original CSV sheet with green/yellow row highlights and numeric formatting."""
     export_df.to_excel(writer, sheet_name=sheet_name, index=False)
     ws = writer.sheets[sheet_name]
+
+    # Detect numeric columns by header name
+    headers = [cell.value for cell in ws[1]]
+    numeric_cols = [
+        i + 1 for i, h in enumerate(headers)
+        if h and str(h).lower() in ("debit", "credit", "balance", "amount")
+    ]
+
     for row_idx, status in enumerate(status_series, start=2):
         if status == "confirmed":
             fill = FILL_GREEN
         elif status == "uncertain":
             fill = FILL_YELLOW
         else:
-            continue
-        for cell in ws[row_idx]:
-            cell.fill = fill
+            fill = None
+
+        for col_idx, cell in enumerate(ws[row_idx], start=1):
+            if fill:
+                cell.fill = fill
+            if col_idx in numeric_cols and cell.value is not None:
+                try:
+                    cell.value  = float(str(cell.value).replace(",", ""))
+                    cell.number_format = ACCT_FMT
+                except (ValueError, TypeError):
+                    pass
+
+    autofit_columns(ws)
+
+
+def write_matches_sheet(writer, df, sheet_name):
+    """Write a matches sheet with numeric columns properly formatted."""
+    df.to_excel(writer, sheet_name=sheet_name, index=False)
+    ws = writer.sheets[sheet_name]
+    headers = [cell.value for cell in ws[1]]
+    numeric_cols = [
+        i + 1 for i, h in enumerate(headers)
+        if h and any(kw in str(h).lower() for kw in ("debit", "credit", "amount"))
+    ]
+    for row in ws.iter_rows(min_row=2):
+        for col_idx, cell in enumerate(row, start=1):
+            if col_idx in numeric_cols and cell.value not in (None, "-", ""):
+                try:
+                    raw = str(cell.value).replace("R", "").replace(",", "").strip()
+                    cell.value = float(raw)
+                    cell.number_format = ACCT_FMT
+                except (ValueError, TypeError):
+                    pass
+    autofit_columns(ws)
+
+
+def write_unmatched_sheet(writer, df, sheet_name):
+    """Write unmatched sheet with numeric columns formatted and columns auto-fitted."""
+    df.to_excel(writer, sheet_name=sheet_name, index=False)
+    ws = writer.sheets[sheet_name]
+    headers = [cell.value for cell in ws[1]]
+    numeric_cols = [
+        i + 1 for i, h in enumerate(headers)
+        if h and str(h).lower() in ("debit", "credit")
+    ]
+    for row in ws.iter_rows(min_row=2):
+        for col_idx, cell in enumerate(row, start=1):
+            if col_idx in numeric_cols and cell.value not in (None, "-", ""):
+                try:
+                    raw = str(cell.value).replace("R", "").replace(",", "").strip()
+                    cell.value = float(raw)
+                    cell.number_format = ACCT_FMT
+                except (ValueError, TypeError):
+                    pass
+    autofit_columns(ws)
 
 
 def to_excel(confirmed, uncertain, unmatched_a, unmatched_b,
@@ -293,26 +370,19 @@ def to_excel(confirmed, uncertain, unmatched_a, unmatched_b,
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         write_highlighted_sheet(writer, export_a, status_a, f"{name_a[:28]}")
         write_highlighted_sheet(writer, export_b, status_b, f"{name_b[:28]}")
-        matches_to_df(confirmed, name_a, name_b).to_excel(writer, sheet_name="Confirmed Matches", index=False)
-        matches_to_df(uncertain, name_a, name_b).to_excel(writer, sheet_name="Uncertain Matches", index=False)
-        unmatched_to_df(unmatched_a, name_b).to_excel(writer, sheet_name=f"Unmatched {name_a[:20]}", index=False)
-        unmatched_to_df(unmatched_b, name_a).to_excel(writer, sheet_name=f"Unmatched {name_b[:20]}", index=False)
+        write_matches_sheet(writer, matches_to_df(confirmed, name_a, name_b), "Confirmed Matches")
+        write_matches_sheet(writer, matches_to_df(uncertain, name_a, name_b), "Uncertain Matches")
+        write_unmatched_sheet(writer, unmatched_to_df(unmatched_a, name_b), f"Unmatched {name_a[:20]}")
+        write_unmatched_sheet(writer, unmatched_to_df(unmatched_b, name_a), f"Unmatched {name_b[:20]}")
     return buf.getvalue()
 
-
-# ─────────────────────────────────────────────
-#  SIDEBAR — settings only
-# ─────────────────────────────────────────────
-with st.sidebar:
-    st.header("Settings")
-    date_tolerance = st.slider("Date tolerance (days)", min_value=0, max_value=7, value=3)
 
 # ─────────────────────────────────────────────
 #  MAIN — inputs
 # ─────────────────────────────────────────────
 st.markdown('<p class="section-label">Company Details</p>', unsafe_allow_html=True)
 
-col_a, col_b = st.columns(2)
+col_a, col_b, col_set = st.columns([2, 2, 1])
 
 with col_a:
     st.markdown('<p class="section-label">Company A</p>', unsafe_allow_html=True)
@@ -325,6 +395,13 @@ with col_b:
     name_b = st.text_input("Company name", value="Company B", key="name_b", label_visibility="collapsed")
     fmt_b  = st.selectbox("Export format", list(FORMATS.keys()), key="fmt_b")
     file_b = st.file_uploader("Upload CSV", type="csv", key="file_b")
+
+with col_set:
+    st.markdown('<p class="section-label">Settings</p>', unsafe_allow_html=True)
+    date_tolerance = st.number_input(
+        "Date tolerance (days)",
+        min_value=0, max_value=14, value=2, step=1,
+    )
 
 st.divider()
 run_btn = st.button("Run Reconciliation", type="primary", use_container_width=True)
