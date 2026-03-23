@@ -14,6 +14,17 @@ LOGO_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2lu
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;600;700&family=Raleway:wght@400;600&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Raleway', sans-serif;
+    }
+
+    [data-testid="stFileUploaderDropzone"] {
+        min-height: 130px !important;
+        padding: 2rem !important;
+    }
+
     .ei-header {
         display: flex;
         align-items: center;
@@ -27,11 +38,12 @@ st.markdown("""
         width: auto;
     }
     .ei-header-text h1 {
-        font-size: 1.8rem;
+        font-family: 'EB Garamond', serif;
+        font-size: 2rem;
         font-weight: 700;
         color: #1a2744;
         margin: 0;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.04em;
     }
     .ei-header-text p {
         font-size: 0.7rem;
@@ -82,7 +94,7 @@ st.markdown(f"""
 <div class="ei-header">
     <img src="data:image/jpeg;base64,{LOGO_B64}" />
     <div class="ei-header-text">
-        <h1>Loan Recon</h1>
+        <h1>Loan Reconciliation</h1>
         <p>Intercompany Loan Matching &middot; El Imperio Accountants</p>
     </div>
 </div>
