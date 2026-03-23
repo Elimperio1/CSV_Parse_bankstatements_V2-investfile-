@@ -179,7 +179,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     color: #ffffff !important;
 }
 .stDownloadButton > button {
-    background: #1a2f5e !important;
+    background: #a3c4c9 !important;
     color: #ffffff !important;
     border: none !important;
     border-radius: 6px !important;
