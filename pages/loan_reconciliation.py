@@ -3,8 +3,92 @@ import pandas as pd
 from io import BytesIO
 from openpyxl.styles import PatternFill
 
-st.title("Intercompany Loan Reconciliation")
-st.caption("Match intercompany loan transactions between two Sage or Pastel exports.")
+# ─────────────────────────────────────────────
+#  STYLE — match El Imperio UI
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+    /* Hide sidebar entirely */
+    [data-testid="stSidebar"] { display: none; }
+
+    /* Header bar matching El Imperio */
+    .ei-header {
+        display: flex;
+        align-items: center;
+        border-bottom: 2px solid #1a2744;
+        padding-bottom: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .ei-header-text h1 {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1a2744;
+        margin: 0;
+        letter-spacing: 0.02em;
+    }
+    .ei-header-text p {
+        font-size: 0.75rem;
+        letter-spacing: 0.15em;
+        color: #888;
+        margin: 0;
+        text-transform: uppercase;
+    }
+
+    /* Section labels */
+    .section-label {
+        font-size: 0.7rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: #1a2744;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+
+    /* Green download button */
+    .stDownloadButton > button {
+        background-color: #1e7e34 !important;
+        color: white !important;
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+        padding: 0.65rem 2rem !important;
+        border: none !important;
+        border-radius: 4px !important;
+        width: 100% !important;
+    }
+    .stDownloadButton > button:hover {
+        background-color: #155724 !important;
+    }
+
+    /* Run button */
+    .stButton > button[kind="primary"] {
+        background-color: #1a2744 !important;
+        color: white !important;
+        font-weight: 600 !important;
+        border-radius: 4px !important;
+        width: 100% !important;
+    }
+
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: #f8f9fa;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 1rem;
+    }
+    [data-testid="stMetricLabel"] { color: #1a2744 !important; font-weight: 600; }
+    [data-testid="stMetricValue"] { color: #1a2744 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+st.markdown("""
+<div class="ei-header">
+    <div class="ei-header-text">
+        <h1>Loan Reconciliation</h1>
+        <p>Intercompany Loan Matching &middot; Powered by El Imperio</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  FORMAT CONFIGS
@@ -22,12 +106,6 @@ FILL_YELLOW = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="s
 # ─────────────────────────────────────────────
 
 def load_and_normalise(uploaded_file, fmt, company_label):
-    """
-    Returns:
-        clean_df  — normalised [date, description, debit, credit] for matching
-        export_df — original columns but filtered to transaction rows only (for highlighted export)
-    Both DataFrames have the same rows in the same order.
-    """
     try:
         raw = uploaded_file.read().decode("utf-8", errors="replace")
         uploaded_file.seek(0)
@@ -42,12 +120,11 @@ def load_and_normalise(uploaded_file, fmt, company_label):
 
     if date_col not in df.columns:
         st.error(
-            f"{company_label}: Expected column **'{date_col}'** not found. "
+            f"{company_label}: Expected column '{date_col}' not found. "
             f"Available columns: {list(df.columns)}"
         )
         return None, None
 
-    # Filter to transaction rows only — same filter used for matching AND export
     mask = df[date_col].str.strip().str.match(r"^\d{2}/\d{2}/\d{4}$", na=False)
     df = df[mask].copy().reset_index(drop=True)
 
@@ -55,10 +132,8 @@ def load_and_normalise(uploaded_file, fmt, company_label):
         st.error(f"{company_label}: No valid transaction rows found after filtering.")
         return None, None
 
-    # export_df = original columns, transaction rows only
     export_df = df.copy()
 
-    # clean_df = normalised columns for matching
     clean = pd.DataFrame()
     clean["date"]        = pd.to_datetime(df[date_col].str.strip(), format="%d/%m/%Y")
     clean["description"] = df["Description"].fillna("").astype(str).str.strip()
@@ -133,20 +208,18 @@ def reconcile(df_a, df_b, tolerance=3):
 
     unmatched_a = a[~a["_used"]].drop(columns=["_used", "_status"]).reset_index(drop=True)
     unmatched_b = b[~b["_used"]].drop(columns=["_used", "_status"]).reset_index(drop=True)
-
-    # _status column aligned with export_df (same row order, same length)
-    status_a = a["_status"].reset_index(drop=True)
-    status_b = b["_status"].reset_index(drop=True)
+    status_a    = a["_status"].reset_index(drop=True)
+    status_b    = b["_status"].reset_index(drop=True)
 
     return confirmed, uncertain, unmatched_a, unmatched_b, status_a, status_b
 
 
 def fmt_amount(v):
-    return f"R {v:,.2f}" if v else "—"
+    return f"R {v:,.2f}" if v else "-"
 
 
 def fmt_date(d):
-    return d.strftime("%d/%m/%Y") if pd.notna(d) else "—"
+    return d.strftime("%d/%m/%Y") if pd.notna(d) else "-"
 
 
 def matches_to_df(matches, name_a, name_b):
@@ -191,21 +264,15 @@ def unmatched_to_df(df, missing_in):
 
 
 def write_highlighted_sheet(writer, export_df, status_series, sheet_name):
-    """
-    Write the original CSV columns (transaction rows only) to a sheet.
-    status_series is aligned 1:1 with export_df rows.
-    Green = confirmed, Yellow = uncertain, no fill = unmatched.
-    """
     export_df.to_excel(writer, sheet_name=sheet_name, index=False)
     ws = writer.sheets[sheet_name]
-
-    for row_idx, status in enumerate(status_series, start=2):  # row 1 = header
+    for row_idx, status in enumerate(status_series, start=2):
         if status == "confirmed":
             fill = FILL_GREEN
         elif status == "uncertain":
             fill = FILL_YELLOW
         else:
-            continue  # unmatched — no highlight
+            continue
         for cell in ws[row_idx]:
             cell.fill = fill
 
@@ -224,66 +291,62 @@ def to_excel(confirmed, uncertain, unmatched_a, unmatched_b,
 
 
 # ─────────────────────────────────────────────
-#  SIDEBAR
+#  STEP 1 — INPUTS
 # ─────────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ Settings")
-    date_tolerance = st.slider("Date tolerance (days)", min_value=0, max_value=7, value=3)
+st.markdown('<p class="section-label">Step 1 — Company Details</p>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-#  MAIN — inputs
-# ─────────────────────────────────────────────
-st.subheader("Step 1 — Company Details & Upload")
-
-col_a, col_b = st.columns(2)
+col_a, col_b, col_set = st.columns([2, 2, 1])
 
 with col_a:
-    st.markdown("#### Company A")
-    name_a = st.text_input("Company name", value="Company A", key="name_a")
+    st.markdown('<p class="section-label">Company A</p>', unsafe_allow_html=True)
+    name_a = st.text_input("Company name", value="Company A", key="name_a", label_visibility="collapsed")
     fmt_a  = st.selectbox("Export format", list(FORMATS.keys()), key="fmt_a")
     file_a = st.file_uploader("Upload CSV", type="csv", key="file_a")
 
 with col_b:
-    st.markdown("#### Company B")
-    name_b = st.text_input("Company name", value="Company B", key="name_b")
+    st.markdown('<p class="section-label">Company B</p>', unsafe_allow_html=True)
+    name_b = st.text_input("Company name", value="Company B", key="name_b", label_visibility="collapsed")
     fmt_b  = st.selectbox("Export format", list(FORMATS.keys()), key="fmt_b")
     file_b = st.file_uploader("Upload CSV", type="csv", key="file_b")
 
+with col_set:
+    st.markdown('<p class="section-label">Settings</p>', unsafe_allow_html=True)
+    date_tolerance = st.slider("Date tolerance (days)", min_value=0, max_value=7, value=3)
+
 st.divider()
-run_btn = st.button("▶ Run Reconciliation", type="primary", use_container_width=True)
+run_btn = st.button("Run Reconciliation", type="primary", use_container_width=True)
 
 # ─────────────────────────────────────────────
-#  MAIN — results
+#  STEP 2 — RESULTS
 # ─────────────────────────────────────────────
 if not run_btn:
-    st.info("Fill in company details, upload both CSVs above, then click **Run Reconciliation**.")
+    st.info("Fill in company details, upload both CSVs above, then click Run Reconciliation.")
     st.stop()
 
 if not file_a or not file_b:
     st.warning("Please upload a CSV for both companies before running.")
     st.stop()
 
-with st.spinner("Loading files…"):
+with st.spinner("Loading files..."):
     df_a, export_a = load_and_normalise(file_a, fmt_a, name_a)
     df_b, export_b = load_and_normalise(file_b, fmt_b, name_b)
 
 if df_a is None or df_b is None:
     st.stop()
 
-with st.spinner("Matching transactions…"):
+with st.spinner("Matching transactions..."):
     confirmed, uncertain, unmatched_a, unmatched_b, status_a, status_b = reconcile(df_a, df_b, date_tolerance)
 
-# Summary
-st.subheader("Step 2 — Results")
+st.markdown('<p class="section-label">Step 2 — Results</p>', unsafe_allow_html=True)
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric(" Confirmed Matches",      len(confirmed))
+c1.metric("Confirmed Matches",      len(confirmed))
 c2.metric("Uncertain Matches",      len(uncertain))
-c3.metric(f" Unmatched in {name_a}", len(unmatched_a))
-c4.metric(f" Unmatched in {name_b}", len(unmatched_b))
+c3.metric(f"Unmatched in {name_a}", len(unmatched_a))
+c4.metric(f"Unmatched in {name_b}", len(unmatched_b))
 
 st.divider()
 
-# Download
 try:
     excel_bytes = to_excel(
         confirmed, uncertain, unmatched_a, unmatched_b,
@@ -294,13 +357,13 @@ try:
         data=excel_bytes,
         file_name="loan_reconciliation.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
 except Exception as e:
-    st.warning(f"Excel export unavailable: {e}. Make sure `openpyxl` is in your requirements.txt.")
+    st.warning(f"Excel export unavailable: {e}. Make sure openpyxl is in your requirements.txt.")
 
 st.divider()
 
-# Results tables
 with st.expander(f"Confirmed Matches  ({len(confirmed)})", expanded=True):
     if confirmed:
         st.dataframe(matches_to_df(confirmed, name_a, name_b), use_container_width=True, hide_index=True)
@@ -318,7 +381,7 @@ with st.expander(f"Uncertain Matches — review these  ({len(uncertain)})", expa
     else:
         st.write("No uncertain matches.")
 
-with st.expander(f" Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True):
+with st.expander(f"Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True):
     if not unmatched_a.empty:
         df_ua = unmatched_to_df(unmatched_a, name_b)
         st.dataframe(
@@ -327,7 +390,7 @@ with st.expander(f" Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True)
             hide_index=True,
         )
     else:
-        st.write(f"All {name_a} transactions matched. ")
+        st.write(f"All {name_a} transactions matched.")
 
 with st.expander(f"Unmatched in {name_b}  ({len(unmatched_b)})", expanded=True):
     if not unmatched_b.empty:
@@ -338,4 +401,4 @@ with st.expander(f"Unmatched in {name_b}  ({len(unmatched_b)})", expanded=True):
             hide_index=True,
         )
     else:
-        st.write(f"All {name_b} transactions matched. ")
+        st.write(f"All {name_b} transactions matched.")
