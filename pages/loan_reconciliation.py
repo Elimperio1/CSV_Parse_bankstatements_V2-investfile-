@@ -3,7 +3,7 @@ import pandas as pd
 from io import BytesIO
 from openpyxl.styles import PatternFill
 
-st.title("🔄 Intercompany Loan Reconciliation")
+st.title("Intercompany Loan Reconciliation")
 st.caption("Match intercompany loan transactions between two Sage or Pastel exports.")
 
 # ─────────────────────────────────────────────
@@ -294,6 +294,7 @@ try:
         data=excel_bytes,
         file_name="loan_reconciliation.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width=20, height=2
     )
 except Exception as e:
     st.warning(f"Excel export unavailable: {e}. Make sure `openpyxl` is in your requirements.txt.")
