@@ -82,7 +82,7 @@ st.markdown(f"""
 <div class="ei-header">
     <img src="data:image/jpeg;base64,{LOGO_B64}" />
     <div class="ei-header-text">
-        <h1>Loan Reconciliation</h1>
+        <h1>Loan Recon</h1>
         <p>Intercompany Loan Matching &middot; El Imperio Accountants</p>
     </div>
 </div>
@@ -298,7 +298,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 #  MAIN — inputs
 # ─────────────────────────────────────────────
-st.markdown('<p class="section-label">Step 1 — Company Details</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-label">Company Details</p>', unsafe_allow_html=True)
 
 col_a, col_b = st.columns(2)
 
