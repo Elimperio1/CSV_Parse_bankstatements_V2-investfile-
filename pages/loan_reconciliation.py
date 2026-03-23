@@ -22,6 +22,12 @@ FILL_YELLOW = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="s
 # ─────────────────────────────────────────────
 
 def load_and_normalise(uploaded_file, fmt, company_label):
+    """
+    Returns:
+        clean_df  — normalised [date, description, debit, credit] for matching
+        export_df — original columns but filtered to transaction rows only (for highlighted export)
+    Both DataFrames have the same rows in the same order.
+    """
     try:
         raw = uploaded_file.read().decode("utf-8", errors="replace")
         uploaded_file.seek(0)
@@ -41,23 +47,25 @@ def load_and_normalise(uploaded_file, fmt, company_label):
         )
         return None, None
 
-    # Keep the original full CSV for export later
-    original = df.copy()
-
+    # Filter to transaction rows only — same filter used for matching AND export
     mask = df[date_col].str.strip().str.match(r"^\d{2}/\d{2}/\d{4}$", na=False)
-    df = df[mask].copy()
+    df = df[mask].copy().reset_index(drop=True)
 
     if df.empty:
         st.error(f"{company_label}: No valid transaction rows found after filtering.")
         return None, None
 
-    df["date"]        = pd.to_datetime(df[date_col].str.strip(), format="%d/%m/%Y")
-    df["description"] = df["Description"].fillna("").astype(str).str.strip()
-    df["debit"]       = pd.to_numeric(df["Debit"].str.replace(",", ""), errors="coerce").fillna(0)
-    df["credit"]      = pd.to_numeric(df["Credit"].str.replace(",", ""), errors="coerce").fillna(0)
+    # export_df = original columns, transaction rows only
+    export_df = df.copy()
 
-    clean = df[["date", "description", "debit", "credit"]].reset_index(drop=True)
-    return clean, original.reset_index(drop=True)
+    # clean_df = normalised columns for matching
+    clean = pd.DataFrame()
+    clean["date"]        = pd.to_datetime(df[date_col].str.strip(), format="%d/%m/%Y")
+    clean["description"] = df["Description"].fillna("").astype(str).str.strip()
+    clean["debit"]       = pd.to_numeric(df["Debit"].str.replace(",", ""), errors="coerce").fillna(0)
+    clean["credit"]      = pd.to_numeric(df["Credit"].str.replace(",", ""), errors="coerce").fillna(0)
+
+    return clean.reset_index(drop=True), export_df.reset_index(drop=True)
 
 
 def reconcile(df_a, df_b, tolerance=3):
@@ -125,10 +133,12 @@ def reconcile(df_a, df_b, tolerance=3):
 
     unmatched_a = a[~a["_used"]].drop(columns=["_used", "_status"]).reset_index(drop=True)
     unmatched_b = b[~b["_used"]].drop(columns=["_used", "_status"]).reset_index(drop=True)
-    tagged_a    = a[["date", "description", "debit", "credit", "_status"]].reset_index(drop=True)
-    tagged_b    = b[["date", "description", "debit", "credit", "_status"]].reset_index(drop=True)
 
-    return confirmed, uncertain, unmatched_a, unmatched_b, tagged_a, tagged_b
+    # _status column aligned with export_df (same row order, same length)
+    status_a = a["_status"].reset_index(drop=True)
+    status_b = b["_status"].reset_index(drop=True)
+
+    return confirmed, uncertain, unmatched_a, unmatched_b, status_a, status_b
 
 
 def fmt_amount(v):
@@ -180,35 +190,32 @@ def unmatched_to_df(df, missing_in):
     return pd.DataFrame(rows)
 
 
-def write_highlighted_csv_sheet(writer, original_df, tagged_df, sheet_name):
+def write_highlighted_sheet(writer, export_df, status_series, sheet_name):
     """
-    Write the original CSV columns to a sheet.
-    Highlight matched rows green, uncertain yellow, leave unmatched plain.
-    Match is done by position — original_df and tagged_df have the same row order
-    (both filtered to transaction rows only).
+    Write the original CSV columns (transaction rows only) to a sheet.
+    status_series is aligned 1:1 with export_df rows.
+    Green = confirmed, Yellow = uncertain, no fill = unmatched.
     """
-    original_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    export_df.to_excel(writer, sheet_name=sheet_name, index=False)
     ws = writer.sheets[sheet_name]
 
-    for row_idx, status in enumerate(tagged_df["_status"], start=2):
+    for row_idx, status in enumerate(status_series, start=2):  # row 1 = header
         if status == "confirmed":
             fill = FILL_GREEN
         elif status == "uncertain":
             fill = FILL_YELLOW
         else:
-            continue  # unmatched = no highlight
+            continue  # unmatched — no highlight
         for cell in ws[row_idx]:
             cell.fill = fill
 
 
 def to_excel(confirmed, uncertain, unmatched_a, unmatched_b,
-             tagged_a, tagged_b, orig_a, orig_b, name_a, name_b):
+             export_a, export_b, status_a, status_b, name_a, name_b):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # Two highlighted original CSV sheets
-        write_highlighted_csv_sheet(writer, orig_a, tagged_a, f"{name_a[:28]}")
-        write_highlighted_csv_sheet(writer, orig_b, tagged_b, f"{name_b[:28]}")
-        # Reconciliation summary sheets
+        write_highlighted_sheet(writer, export_a, status_a, f"{name_a[:28]}")
+        write_highlighted_sheet(writer, export_b, status_b, f"{name_b[:28]}")
         matches_to_df(confirmed, name_a, name_b).to_excel(writer, sheet_name="Confirmed Matches", index=False)
         matches_to_df(uncertain, name_a, name_b).to_excel(writer, sheet_name="Uncertain Matches", index=False)
         unmatched_to_df(unmatched_a, name_b).to_excel(writer, sheet_name=f"Unmatched {name_a[:20]}", index=False)
@@ -217,7 +224,7 @@ def to_excel(confirmed, uncertain, unmatched_a, unmatched_b,
 
 
 # ─────────────────────────────────────────────
-#  SIDEBAR — settings only
+#  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -231,13 +238,13 @@ st.subheader("Step 1 — Company Details & Upload")
 col_a, col_b = st.columns(2)
 
 with col_a:
-    st.markdown("#### 🏢 Company A")
+    st.markdown("#### Company A")
     name_a = st.text_input("Company name", value="Company A", key="name_a")
     fmt_a  = st.selectbox("Export format", list(FORMATS.keys()), key="fmt_a")
     file_a = st.file_uploader("Upload CSV", type="csv", key="file_a")
 
 with col_b:
-    st.markdown("#### 🏢 Company B")
+    st.markdown("#### Company B")
     name_b = st.text_input("Company name", value="Company B", key="name_b")
     fmt_b  = st.selectbox("Export format", list(FORMATS.keys()), key="fmt_b")
     file_b = st.file_uploader("Upload CSV", type="csv", key="file_b")
@@ -257,22 +264,22 @@ if not file_a or not file_b:
     st.stop()
 
 with st.spinner("Loading files…"):
-    df_a, orig_a = load_and_normalise(file_a, fmt_a, name_a)
-    df_b, orig_b = load_and_normalise(file_b, fmt_b, name_b)
+    df_a, export_a = load_and_normalise(file_a, fmt_a, name_a)
+    df_b, export_b = load_and_normalise(file_b, fmt_b, name_b)
 
 if df_a is None or df_b is None:
     st.stop()
 
 with st.spinner("Matching transactions…"):
-    confirmed, uncertain, unmatched_a, unmatched_b, tagged_a, tagged_b = reconcile(df_a, df_b, date_tolerance)
+    confirmed, uncertain, unmatched_a, unmatched_b, status_a, status_b = reconcile(df_a, df_b, date_tolerance)
 
-# Summary metrics
+# Summary
 st.subheader("Step 2 — Results")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("✅ Confirmed Matches",      len(confirmed))
-c2.metric("⚠️ Uncertain Matches",      len(uncertain))
-c3.metric(f"❌ Unmatched in {name_a}", len(unmatched_a))
-c4.metric(f"❌ Unmatched in {name_b}", len(unmatched_b))
+c1.metric(" Confirmed Matches",      len(confirmed))
+c2.metric("Uncertain Matches",      len(uncertain))
+c3.metric(f" Unmatched in {name_a}", len(unmatched_a))
+c4.metric(f" Unmatched in {name_b}", len(unmatched_b))
 
 st.divider()
 
@@ -280,10 +287,10 @@ st.divider()
 try:
     excel_bytes = to_excel(
         confirmed, uncertain, unmatched_a, unmatched_b,
-        tagged_a, tagged_b, orig_a, orig_b, name_a, name_b
+        export_a, export_b, status_a, status_b, name_a, name_b
     )
     st.download_button(
-        label="⬇️ Download Full Report (Excel)",
+        label="Download Full Report (Excel)",
         data=excel_bytes,
         file_name="loan_reconciliation.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -294,13 +301,13 @@ except Exception as e:
 st.divider()
 
 # Results tables
-with st.expander(f"✅ Confirmed Matches  ({len(confirmed)})", expanded=True):
+with st.expander(f"Confirmed Matches  ({len(confirmed)})", expanded=True):
     if confirmed:
         st.dataframe(matches_to_df(confirmed, name_a, name_b), use_container_width=True, hide_index=True)
     else:
         st.write("No confirmed matches found.")
 
-with st.expander(f"⚠️ Uncertain Matches — review these  ({len(uncertain)})", expanded=True):
+with st.expander(f"Uncertain Matches — review these  ({len(uncertain)})", expanded=True):
     if uncertain:
         df_unc = matches_to_df(uncertain, name_a, name_b)
         st.dataframe(
@@ -311,7 +318,7 @@ with st.expander(f"⚠️ Uncertain Matches — review these  ({len(uncertain)})
     else:
         st.write("No uncertain matches.")
 
-with st.expander(f"❌ Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True):
+with st.expander(f" Unmatched in {name_a}  ({len(unmatched_a)})", expanded=True):
     if not unmatched_a.empty:
         df_ua = unmatched_to_df(unmatched_a, name_b)
         st.dataframe(
@@ -320,9 +327,9 @@ with st.expander(f"❌ Unmatched in {name_a}  ({len(unmatched_a)})", expanded=Tr
             hide_index=True,
         )
     else:
-        st.write(f"All {name_a} transactions matched. ✅")
+        st.write(f"All {name_a} transactions matched. ")
 
-with st.expander(f"❌ Unmatched in {name_b}  ({len(unmatched_b)})", expanded=True):
+with st.expander(f"Unmatched in {name_b}  ({len(unmatched_b)})", expanded=True):
     if not unmatched_b.empty:
         df_ub = unmatched_to_df(unmatched_b, name_a)
         st.dataframe(
@@ -331,4 +338,4 @@ with st.expander(f"❌ Unmatched in {name_b}  ({len(unmatched_b)})", expanded=Tr
             hide_index=True,
         )
     else:
-        st.write(f"All {name_b} transactions matched. ✅")
+        st.write(f"All {name_b} transactions matched. ")
