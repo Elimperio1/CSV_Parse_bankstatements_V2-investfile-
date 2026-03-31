@@ -3,3 +3,5 @@ anthropic>=0.25.0
 pypdf>=4.0.0
 PyMuPDF>=1.23.0
 openpyxl
+gspread
+google-auth
