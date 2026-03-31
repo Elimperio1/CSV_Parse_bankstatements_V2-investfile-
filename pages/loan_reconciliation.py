@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from openpyxl.styles import PatternFill
+from auth import require_login, show_sidebar_user
 
 # ─────────────────────────────────────────────
 #  EMBEDDED LOGO (base64)
@@ -100,6 +101,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+require_login()
 # ─────────────────────────────────────────────
 #  FORMAT CONFIGS
 # ─────────────────────────────────────────────
