@@ -582,14 +582,20 @@ def get_file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
 def is_scanned_pdf(pdf_bytes: bytes) -> bool:
-    """True if the PDF has no meaningful text layer (i.e. it is an image scan)."""
+    """True if the PDF has no meaningful text layer (i.e. it is an image scan).
+    Uses fitz (PyMuPDF) — the same library used for extraction — so the
+    scanned check is consistent with what the extractor actually sees."""
     try:
-        import pypdf
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        return len(text.strip()) < 100
+        for page in doc:
+            text += page.get_text() or ""
+        doc.close()
+        # fitz extracts full text from digital PDFs, so a meaningful
+        # document will have far more than 100 chars. Scanned PDFs
+        # return near-empty strings.  500 chars is a safe threshold.
+        return len(text.strip()) < 500
     except Exception:
         return True  # assume scanned if we cannot read it
 
