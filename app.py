@@ -582,20 +582,43 @@ def get_file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
 def is_scanned_pdf(pdf_bytes: bytes) -> bool:
-    """True if the PDF has no meaningful text layer (i.e. it is an image scan).
-    Uses fitz (PyMuPDF) — the same library used for extraction — so the
-    scanned check is consistent with what the extractor actually sees."""
+    """True if the PDF is image-only (scanned) with no usable text layer.
+
+    Strategy — two independent signals, BOTH must indicate scanned:
+    1. Total extracted text across all pages is below a per-page threshold.
+       Digital bank statements have dense text; 150 chars/page is very
+       conservative — even a sparse page will exceed this.
+    2. At least half the pages individually yield fewer than 100 characters,
+       which rules out "mostly digital with one image cover page" documents.
+
+    If either check says "text is present" we treat the PDF as digital and
+    skip vision mode.  Defaults to True (use vision) only when PyMuPDF
+    cannot open the file at all.
+    """
     try:
         import fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text() or ""
+        total_pages = len(doc)
+        if total_pages == 0:
+            doc.close()
+            return True
+
+        page_texts = [page.get_text() or "" for page in doc]
         doc.close()
-        # fitz extracts full text from digital PDFs, so a meaningful
-        # document will have far more than 100 chars. Scanned PDFs
-        # return near-empty strings.  500 chars is a safe threshold.
-        return len(text.strip()) < 500
+
+        total_chars   = sum(len(t.strip()) for t in page_texts)
+        sparse_pages  = sum(1 for t in page_texts if len(t.strip()) < 100)
+
+        # Signal 1: average chars per page must exceed threshold
+        chars_per_page = total_chars / total_pages
+        if chars_per_page >= 150:
+            return False   # clearly digital — skip vision
+
+        # Signal 2: majority of pages are sparse → likely scanned
+        if sparse_pages >= (total_pages / 2):
+            return True
+
+        return False
     except Exception:
         return True  # assume scanned if we cannot read it
 
