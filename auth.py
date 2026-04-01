@@ -5,12 +5,20 @@ import json
 from datetime import datetime
 
 def get_gspread_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ]
     creds_dict = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
     if isinstance(creds_dict, str):
         creds_dict = json.loads(creds_dict)
+    elif hasattr(creds_dict, "to_dict"):
+        # Streamlit TOML secrets return an AttrDict — convert to plain dict
+        creds_dict = dict(creds_dict)
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    return gspread.authorize(creds)
+    # gspread >=6 uses Client(auth=...) — authorize() is deprecated
+    return gspread.Client(auth=creds)
 
 def verify_user(email_input):
     # 1. BYPASS CHECK
@@ -24,37 +32,51 @@ def verify_user(email_input):
         client = get_gspread_client()
         sheet = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"]).sheet1
         records = sheet.get_all_records()
-        
+
         for row in records:
-            # Lowercase keys and values
-            row_lower = {str(k).lower().strip(): str(v).lower().strip() for k, v in row.items()}
-            if row_lower.get('email') == target_email:
+            # Lowercase ALL keys so column header casing doesn't matter
+            row_lower = {str(k).lower().strip(): str(v).strip() for k, v in row.items()}
+            if row_lower.get("email", "").lower() == target_email:
+                # Retrieve display name — try several likely column names
+                name = (
+                    row_lower.get("name")
+                    or row_lower.get("full name")
+                    or row_lower.get("fullname")
+                    or row_lower.get("display name")
+                    or "User"
+                )
                 return {
                     "email": target_email,
-                    "name": row.get('Name', row.get('name', 'User')),
-                    "authorized": True
+                    "name": name,
+                    "authorized": True,
                 }
+    except KeyError as e:
+        st.error(f"Auth config error — missing secret: {e}")
     except Exception as e:
         st.error(f"Auth Error: {e}")
-    
+
     return {"authorized": False}
 
 def require_login(logo_b64=None):
-    if not st.session_state.get('logged_in'):
+    if not st.session_state.get("logged_in"):
         if logo_b64:
-            st.markdown(f'<div style="text-align:center; padding-top: 50px;"><img src="data:image/png;base64,{logo_b64}" width="200"></div>', unsafe_allow_html=True)
-        
+            st.markdown(
+                f'<div style="text-align:center; padding-top: 50px;">'
+                f'<img src="data:image/png;base64,{logo_b64}" width="200"></div>',
+                unsafe_allow_html=True,
+            )
+
         st.markdown("<h2 style='text-align: center;'>Secure Access</h2>", unsafe_allow_html=True)
-        
+
         _, col2, _ = st.columns([1, 2, 1])
         with col2:
             email = st.text_input("Email:")
             if st.button("Login", use_container_width=True):
                 res = verify_user(email)
                 if res["authorized"]:
-                    st.session_state.logged_in = True
-                    st.session_state.user_email = res["email"]
-                    st.session_state.user_name = res["name"]
+                    st.session_state.logged_in    = True
+                    st.session_state.user_email   = res["email"]
+                    st.session_state.user_name    = res["name"]
                     st.rerun()
                 else:
                     st.error("Email not found.")
@@ -72,7 +94,7 @@ def log_usage(email, bank, file_count, input_tokens, output_tokens):
         sheet = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"]).worksheet("Usage")
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            email, bank, file_count, input_tokens, output_tokens
+            email, bank, file_count, input_tokens, output_tokens,
         ])
-    except:
+    except Exception:
         pass
