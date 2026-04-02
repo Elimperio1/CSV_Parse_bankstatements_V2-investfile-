@@ -103,9 +103,9 @@ def show_sidebar_user():
         st.rerun()
 
 
-def log_usage(email, bank, file_count, input_tokens, output_tokens):
+def log_usage(email, bank, file_count, input_tokens, output_tokens, cost_usd=0.0, cost_zar=0.0):
     try:
-        client     = get_gspread_client()
+        client      = get_gspread_client()
         spreadsheet = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
 
         # Get or create the Usage worksheet
@@ -113,11 +113,12 @@ def log_usage(email, bank, file_count, input_tokens, output_tokens):
             sheet = spreadsheet.worksheet("Usage")
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title="Usage", rows=1000, cols=10)
-            sheet.append_row(["Timestamp", "Email", "Bank", "Files", "Input Tokens", "Output Tokens"])
+            sheet.append_row(["Timestamp", "Email", "Bank", "Files", "Input Tokens", "Output Tokens", "Cost USD", "Cost ZAR"])
 
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             email, bank, file_count, input_tokens, output_tokens,
+            round(cost_usd, 6), round(cost_zar, 4),
         ])
     except Exception:
         pass
