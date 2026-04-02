@@ -6,6 +6,7 @@ from datetime import datetime
 
 BYPASS_CODES = {"BYPASSTEST", "LOGINBYPASSTEST", "bypasstest"}
 
+
 def get_gspread_client():
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -14,17 +15,12 @@ def get_gspread_client():
     ]
     raw = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
 
-    # Convert to a plain dict regardless of how Streamlit stored it
+    # Stored as a JSON string (triple-quoted or single-line)
     if isinstance(raw, str):
         creds_dict = json.loads(raw)
-    elif hasattr(raw, "to_dict"):
-        creds_dict = dict(raw)
     else:
-        creds_dict = dict(raw)
-
-    # Fix corrupted private_key — Streamlit TOML sometimes stores \n as literal \\n
-    if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        # Streamlit parsed it as a TOML table — convert to plain dict
+        creds_dict = {k: v for k, v in raw.items()}
 
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.Client(auth=creds)
@@ -109,8 +105,16 @@ def show_sidebar_user():
 
 def log_usage(email, bank, file_count, input_tokens, output_tokens):
     try:
-        client = get_gspread_client()
-        sheet  = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"]).worksheet("Usage")
+        client     = get_gspread_client()
+        spreadsheet = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
+
+        # Get or create the Usage worksheet
+        try:
+            sheet = spreadsheet.worksheet("Usage")
+        except gspread.exceptions.WorksheetNotFound:
+            sheet = spreadsheet.add_worksheet(title="Usage", rows=1000, cols=10)
+            sheet.append_row(["Timestamp", "Email", "Bank", "Files", "Input Tokens", "Output Tokens"])
+
         sheet.append_row([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             email, bank, file_count, input_tokens, output_tokens,
