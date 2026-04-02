@@ -4,11 +4,7 @@ from google.oauth2.service_account import Credentials
 import json
 from datetime import datetime
 
-# ─── BYPASS CODES ─────────────────────────────────────────────────────────────
-# Type any of these in the email field to skip Google Sheets auth entirely.
 BYPASS_CODES = {"BYPASSTEST", "LOGINBYPASSTEST", "bypasstest"}
-
-# ─── GOOGLE SHEETS CLIENT ─────────────────────────────────────────────────────
 
 def get_gspread_client():
     scope = [
@@ -16,23 +12,29 @@ def get_gspread_client():
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets",
     ]
-    creds_dict = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
-    if isinstance(creds_dict, str):
-        creds_dict = json.loads(creds_dict)
-    elif hasattr(creds_dict, "to_dict"):
-        creds_dict = dict(creds_dict)
+    raw = st.secrets["GOOGLE_SERVICE_ACCOUNT"]
+
+    # Convert to a plain dict regardless of how Streamlit stored it
+    if isinstance(raw, str):
+        creds_dict = json.loads(raw)
+    elif hasattr(raw, "to_dict"):
+        creds_dict = dict(raw)
+    else:
+        creds_dict = dict(raw)
+
+    # Fix corrupted private_key — Streamlit TOML sometimes stores \n as literal \\n
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.Client(auth=creds)
 
 
-# ─── USER VERIFICATION ────────────────────────────────────────────────────────
-
 def verify_user(email_input: str) -> dict:
     raw = email_input.strip()
 
-    # Bypass check (case-insensitive)
     if raw.upper() in {c.upper() for c in BYPASS_CODES}:
-        return {"email": "bypass@elimpeiro.co.za", "name": "Bypass User", "authorized": True}
+        return {"email": "bypass@elimpeiro.co.za", "name": "Admin", "authorized": True}
 
     target_email = raw.lower()
 
@@ -61,12 +63,9 @@ def verify_user(email_input: str) -> dict:
     return {"authorized": False}
 
 
-# ─── LOGIN WALL ───────────────────────────────────────────────────────────────
-
 def require_login(logo_b64=None):
-    """Block the app until the user logs in. Call immediately after set_page_config."""
     if st.session_state.get("logged_in"):
-        return  # already authenticated
+        return
 
     if logo_b64:
         st.markdown(
@@ -83,12 +82,6 @@ def require_login(logo_b64=None):
         email = st.text_input("Email address:", key="_login_email")
         login_clicked = st.button("Login", use_container_width=True, key="_login_btn")
 
-        st.markdown(
-            "<p style='text-align:center; color:#8a9ab8; font-size:11px; margin-top:8px;'>"
-            "Can't log in? Type <strong>BYPASSTEST</strong> and press Login to continue.</p>",
-            unsafe_allow_html=True,
-        )
-
         if login_clicked:
             if not email.strip():
                 st.warning("Please enter your email address.")
@@ -100,12 +93,10 @@ def require_login(logo_b64=None):
                     st.session_state.user_name  = res["name"]
                     st.rerun()
                 else:
-                    st.error("Email not found. Contact your administrator, or use BYPASSTEST.")
+                    st.error("Email not found. Please contact your administrator.")
 
     st.stop()
 
-
-# ─── SIDEBAR USER INFO ────────────────────────────────────────────────────────
 
 def show_sidebar_user():
     name = st.session_state.get("user_name", "Unknown")
@@ -115,8 +106,6 @@ def show_sidebar_user():
             st.session_state.pop(k, None)
         st.rerun()
 
-
-# ─── USAGE LOGGING ────────────────────────────────────────────────────────────
 
 def log_usage(email, bank, file_count, input_tokens, output_tokens):
     try:
