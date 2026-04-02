@@ -1268,6 +1268,8 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 file_count=1,
                 input_tokens=inp_tok,
                 output_tokens=out_tok,
+                cost_usd=cost_usd,
+                cost_zar=cost_zar,
             )
 
         except Exception as e:
