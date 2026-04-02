@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json, csv, io, re, time
 from datetime import datetime
-from auth import require_login, show_sidebar_user
+from auth import require_login, show_sidebar_user, log_usage
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1260,6 +1260,15 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 'total_pages':    tp,
             })
             st.session_state.all_rows.extend(rows)
+
+            # ── Log usage to Google Sheets ────────────────────────────────
+            log_usage(
+                email=st.session_state.get("user_email", "unknown"),
+                bank=effective_bank,
+                file_count=1,
+                input_tokens=inp_tok,
+                output_tokens=out_tok,
+            )
 
         except Exception as e:
             error_msg = str(e)
