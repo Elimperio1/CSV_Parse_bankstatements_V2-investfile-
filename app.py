@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json, csv, io, re, time
 from datetime import datetime
+from auth import require_login, show_sidebar_user
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -12,6 +13,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ─── AUTH GATE — must be first thing after page config ────────────────────────
+require_login()
 
 # ─── CUSTOM CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
@@ -994,6 +998,8 @@ for k, v in defaults.items():
 with st.sidebar:
     st.markdown("### El Imperio")
     st.markdown("#### CSV Parser")
+    st.markdown("---")
+    show_sidebar_user()
     st.markdown("---")
 
     st.markdown("**Select Bank**")
