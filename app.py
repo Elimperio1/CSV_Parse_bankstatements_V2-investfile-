@@ -1597,8 +1597,8 @@ with tab_results:
                     page_tag    = f" [pp. {f['page_range']}]" if f.get('page_range') else ""
                     elapsed_tag = f" — {f['elapsed']}s"       if f.get('elapsed')    else ""
                     cost_tag    = (
-                        f"  ·  ${f.get('cost_usd', 0):.4f} / R{f.get('cost_zar', 0):.4f}"
-                        if f.get('cost_usd') else ""
+                        f"  ·  ${f.get('cost_usd', 0):.4f} USD / R{f.get('cost_zar', 0):.4f} ZAR"
+                        if f.get('cost_usd') is not None else ""
                     )
                     section_tag = (
                         f" [{f['section_label'].replace('_', ' ')}]"
@@ -1742,8 +1742,8 @@ with tab_history:
                     if f.get('fee_count', 0) > 0 else ""
                 )
                 cost_tag = (
-                    f"  ·  ${f.get('cost_usd', 0):.4f} / R{f.get('cost_zar', 0):.4f}"
-                    if f.get('cost_usd') else ""
+                    f"  ·  ${f.get('cost_usd', 0):.4f} USD / R{f.get('cost_zar', 0):.4f} ZAR"
+                    if f.get('cost_usd') is not None else ""
                 )
                 col_a, col_b = st.columns([3, 1])
                 with col_a:
