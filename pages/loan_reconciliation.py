@@ -121,15 +121,41 @@ def load_and_normalise(uploaded_file, fmt, company_label):
     try:
         raw = uploaded_file.read().decode("utf-8", errors="replace")
         uploaded_file.seek(0)
-        first_line = raw.splitlines()[0].strip().lower()
-        skip = 1 if first_line.startswith("sep=") else 0
-        df = pd.read_csv(uploaded_file, dtype=str, skiprows=skip)
+        lines = raw.splitlines()
+
+        # Strip BOM from first line if present
+        if lines and lines[0].startswith('\ufeff'):
+            lines[0] = lines[0][1:]
+
+        # Find the real header row (the one containing the expected date column)
+        date_col = FORMATS[fmt]["date_col"]
+        header_row_idx = None
+        for i, line in enumerate(lines):
+            cols = [c.strip().strip('"') for c in line.split(',')]
+            if date_col in cols:
+                header_row_idx = i
+                break
+
+        if header_row_idx is None:
+            st.error(
+                f"{company_label}: Could not find column '{date_col}' in any row. "
+                f"First row content: {lines[0][:120]}"
+            )
+            return None, None
+
+        # Re-read with the correct skiprows
+        from io import StringIO
+        df = pd.read_csv(
+            StringIO(raw),
+            dtype=str,
+            skiprows=header_row_idx,
+        )
+
     except Exception as e:
         st.error(f"{company_label}: Could not read CSV — {e}")
         return None, None
 
-    date_col = FORMATS[fmt]["date_col"]
-
+    # --- rest of the function stays exactly the same ---
     if date_col not in df.columns:
         st.error(
             f"{company_label}: Expected column '{date_col}' not found. "
