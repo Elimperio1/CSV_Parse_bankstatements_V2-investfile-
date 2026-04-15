@@ -928,7 +928,7 @@ def rows_to_csv_bytes(rows: list) -> bytes:
     writer = csv.writer(output)
     writer.writerow(['Date', 'Description', 'Amount'])
     for row in rows:
-        writer.writerow([row['date'], row['description'], row['amount']])
+        writer.writerow([row['date'], row['details'], row['amount']])
     return output.getvalue().encode('utf-8')
 
 def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
