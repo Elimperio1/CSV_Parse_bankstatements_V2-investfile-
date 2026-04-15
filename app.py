@@ -926,7 +926,7 @@ def deduplicate_rows(rows: list) -> list:
 def rows_to_csv_bytes(rows: list) -> bytes:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Date', 'woorde', 'Amount'])
+    writer.writerow(['Date', 'Description', 'Amount'])
     for row in rows:
         writer.writerow([row['date'], row['details'], row['amount']])
     return output.getvalue().encode('utf-8')
