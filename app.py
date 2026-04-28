@@ -865,21 +865,24 @@ def extract_transactions(pdf_bytes: bytes, bank: str, stream_status=None):
 
 def clean_description(text: str) -> str:
     """
-    Clean a transaction description ONLY if it exceeds 50 characters.
-    Rows <= 50 chars pass through completely untouched (no special-char
-    stripping, no number-removal, nothing).
+    Always-on description cleaning. Output is guaranteed to contain only
+    letters, digits, and single spaces — no commas, no dashes, no special
+    characters of any kind. This is required because:
+      - Pastel CSV import is unreliable with commas inside fields.
+      - Descriptions are for allocation context only; the amount column
+        carries the actual money, so digit runs and reference codes
+        embedded in descriptions are not useful.
 
-    When cleaning is triggered:
-    1. Replace anything that isn't a letter, digit, or space with a space
-       (so 'PAYMENT-FROM-JOHN' becomes 'PAYMENT FROM JOHN', not 'PAYMENTFROMJOHN').
-    2. Remove standalone digit runs of 6+ characters (account numbers,
-       phone numbers, long reference codes — not useful for Pastel allocation).
+    Steps:
+    1. Replace anything that isn't a letter, digit, or space with a space.
+    2. Remove standalone digit runs of 6 or more characters (account
+       numbers, phone numbers, long reference codes).
     3. Collapse repeated adjacent words case-insensitively, keeping the
        first occurrence's casing (so 'PAYMENT Payment from' -> 'PAYMENT from').
     4. Collapse multiple spaces, trim ends.
     5. Hard-truncate to 50 chars if still longer.
     """
-    if not text or len(text) <= 50:
+    if not text:
         return text
 
     cleaned = re.sub(r'[^A-Za-z0-9 ]', ' ', text)
