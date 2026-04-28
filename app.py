@@ -863,6 +863,40 @@ def extract_transactions(pdf_bytes: bytes, bank: str, stream_status=None):
 
 # ─── ROW PROCESSING ───────────────────────────────────────────────────────────
 
+def clean_description(text: str) -> str:
+    """
+    Clean a transaction description ONLY if it exceeds 50 characters.
+    Rows <= 50 chars pass through completely untouched (no special-char
+    stripping, no number-removal, nothing).
+
+    When cleaning is triggered:
+    1. Replace anything that isn't a letter, digit, or space with a space
+       (so 'PAYMENT-FROM-JOHN' becomes 'PAYMENT FROM JOHN', not 'PAYMENTFROMJOHN').
+    2. Remove standalone digit runs of 6+ characters (account numbers,
+       phone numbers, long reference codes — not useful for Pastel allocation).
+    3. Collapse repeated adjacent words case-insensitively, keeping the
+       first occurrence's casing (so 'PAYMENT Payment from' -> 'PAYMENT from').
+    4. Collapse multiple spaces, trim ends.
+    5. Hard-truncate to 50 chars if still longer.
+    """
+    if not text or len(text) <= 50:
+        return text
+
+    cleaned = re.sub(r'[^A-Za-z0-9 ]', ' ', text)
+    cleaned = re.sub(r'\b\d{6,}\b', '', cleaned)
+
+    words   = cleaned.split()
+    deduped = []
+    for w in words:
+        if not deduped or deduped[-1].lower() != w.lower():
+            deduped.append(w)
+    cleaned = ' '.join(deduped)
+
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    if len(cleaned) > 50:
+        cleaned = cleaned[:50].rstrip()
+    return cleaned
+
 def normalise_date(date_str: str) -> str:
     """Ensure date is always DD/MM/YYYY."""
     if not date_str:
@@ -892,6 +926,8 @@ def build_rows(raw: list, bank: str) -> list:
         reference = str(r.get('reference', '')).strip()
         if reference:
             details = f"{details} / {reference}"
+
+        details = clean_description(details)
 
         if bank == "Capitec":
             fee = float(r.get('fee', 0) or 0)
