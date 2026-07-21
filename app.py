@@ -136,6 +136,12 @@ div[data-baseweb="menu"]         { background-color: #ffffff !important; border:
 li[role="option"]                { background-color: #ffffff !important; color: #1a2f5e !important; }
 li[role="option"]:hover          { background-color: #eef1f7 !important; }
 
+/* ── Bank selector — blue accent outline so it stands out ────────────── */
+.st-key-bank_selector div[data-baseweb="select"] > div {
+    border: 2px solid #2563eb !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12) !important;
+}
+
 /* ── Radio buttons ───────────────────────────────────────────────────── */
 div[data-testid="stRadio"] label p { color: #1a2f5e !important; }
 div[data-testid="stRadio"] p       { color: #1a2f5e !important; }
@@ -1367,16 +1373,19 @@ if st.session_state.all_rows:
 st.markdown("#### Select Bank")
 col_bank, col_fmt = st.columns([1, 2])
 with col_bank:
-    selected_bank = st.selectbox(
-        "Bank", BANK_LIST,
-        label_visibility="collapsed", key="selected_bank"
-    )
+    with st.container(key="bank_selector"):
+        selected_bank = st.selectbox(
+            "Bank", BANK_LIST,
+            index=None, placeholder="Choose a bank...",
+            label_visibility="collapsed", key="selected_bank"
+        )
 with col_fmt:
-    if selected_bank in BANKS_WITH_REFERENCE:
+    if selected_bank is None:
+        st.caption("⚠ No bank selected — processing stays disabled until you choose one.")
+    elif selected_bank in BANKS_WITH_REFERENCE:
         st.caption("Output: Date · Details · Amount · Reference (Fund Name)")
     else:
         st.caption("Output: Date · Details · Amount")
-    st.caption("Signed amount: positive = money in, negative = money out")
 
 if selected_bank == "Capitec":
     st.caption("Capitec fees are automatically split into separate **Service Fee** rows.")
@@ -1391,9 +1400,9 @@ st.markdown("")
 
 # ─── UPLOAD ───────────────────────────────────────────────────────────────────
 
-st.markdown(f"#### Upload {selected_bank} Statements")
+st.markdown(f"#### Upload {selected_bank} Statements" if selected_bank else "#### Upload Statements")
 uploaded_files = st.file_uploader(
-    f"Drop {selected_bank} PDF statements here",
+    f"Drop {selected_bank or 'bank'} PDF statements here",
     type=["pdf"],
     accept_multiple_files=True,
     label_visibility="collapsed",
@@ -1661,7 +1670,13 @@ elif uploaded_files:
             fb = st.session_state.cached_upload_bytes.get(f.name, b'')
 
             detected = detect_bank_from_filename(f.name)
-            if detected and detected != selected_bank:
+            if selected_bank is None:
+                icon  = "⚠"
+                note  = (
+                    (f"Filename suggests **{detected}** — " if detected else "")
+                    + "select a bank above to enable processing"
+                )
+            elif detected and detected != selected_bank:
                 icon  = "⚠"
                 note  = f"Filename suggests **{detected}** — you have **{selected_bank}** selected"
                 any_mismatch = True
@@ -1863,9 +1878,15 @@ elif uploaded_files:
         col_confirm, col_cancel = st.columns(2)
 
         with col_confirm:
-            confirm_disabled = not range_ready
+            # Greyed out until a bank is chosen — prevents accidentally parsing
+            # with the wrong (or no) bank prompt and wasting API tokens
+            confirm_disabled = (not range_ready) or (selected_bank is None)
+            confirm_label = (
+                f"Confirm — process as {selected_bank}"
+                if selected_bank else "Confirm — select a bank first"
+            )
             if st.button(
-                f"Confirm — process as {selected_bank}",
+                confirm_label,
                 use_container_width=True,
                 disabled=confirm_disabled
             ):
