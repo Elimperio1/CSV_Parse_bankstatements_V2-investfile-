@@ -183,7 +183,7 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     color: #ffffff !important;
 }
 .stDownloadButton > button {
-    background: ##63eaff !important;
+    background: #1a2f5e !important;
     color: #ffffff !important;
     border: none !important;
     border-radius: 6px !important;
@@ -215,8 +215,18 @@ div[data-testid="stAlert"]       { border-radius: 8px !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── COST CONSTANTS ───────────────────────────────────────────────────────────
-# claude-sonnet-4-6 pricing (Anthropic published rates)
+# ─── MODEL & COST CONSTANTS ──────────────────────────────────────────────────
+# Upgraded from claude-sonnet-4-6 → claude-sonnet-5 (better extraction accuracy,
+# same sticker price). Thinking is explicitly disabled on every call so the
+# model behaves like sonnet-4-6 did (deterministic, no thinking-token spend) —
+# on sonnet-5, omitting the thinking parameter would silently enable it.
+MODEL = "claude-sonnet-5"
+
+# claude-sonnet-5 pricing (Anthropic published rates): $3/$15 per MTok standard.
+# An intro discount ($2/$10) applies until 31 Aug 2026 — the app uses standard
+# rates, so shown costs slightly overestimate until then. Note: sonnet-5 uses a
+# new tokenizer (~30% more tokens for the same text than sonnet-4-6), so token
+# counts per statement are higher even though the per-token price is unchanged.
 COST_USD_PER_M_INPUT  = 3.00   # $ per million input tokens
 COST_USD_PER_M_OUTPUT = 15.00  # $ per million output tokens
 # USD/ZAR 3-month average Dec 2025 – Feb 2026
@@ -654,6 +664,45 @@ def slice_pdf_bytes(pdf_bytes: bytes, start_page: int, end_page: int) -> bytes:
     doc.close()
     return buf
 
+def find_blank_pages(pdf_bytes: bytes) -> list:
+    """Return 1-indexed page numbers that are truly blank (no text layer and no images)."""
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        blanks = []
+        for i, page in enumerate(doc):
+            text = (page.get_text() or "").strip()
+            if len(text) < 15 and not page.get_images(full=True):
+                blanks.append(i + 1)
+        doc.close()
+        return blanks
+    except Exception:
+        return []
+
+def remove_blank_pages(pdf_bytes: bytes):
+    """
+    Return (pdf_bytes_without_blank_pages, [removed 1-indexed page numbers]).
+    Blank pages between two statements previously made extraction stop early —
+    stripping them (and telling the model to continue past them) prevents that.
+    Falls back to the original bytes on any error or if every page looks blank.
+    """
+    blanks = find_blank_pages(pdf_bytes)
+    if not blanks:
+        return pdf_bytes, []
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if len(blanks) >= len(doc):
+            doc.close()
+            return pdf_bytes, []
+        keep = [i for i in range(len(doc)) if (i + 1) not in blanks]
+        doc.select(keep)
+        buf = doc.tobytes()
+        doc.close()
+        return buf, blanks
+    except Exception:
+        return pdf_bytes, []
+
 def pdf_to_images_b64(pdf_bytes: bytes) -> list:
     """Convert every page of a PDF to a base64-encoded PNG (for vision mode)."""
     import fitz
@@ -670,65 +719,113 @@ def pdf_to_images_b64(pdf_bytes: bytes) -> list:
 # ─── EXTRACTION — VISION MODE ─────────────────────────────────────────────────
 
 def extract_transactions_vision(pdf_bytes, bank, stream_status=None):
-    """Send PDF pages as images to Claude vision. Returns (rows, input_tokens, output_tokens)."""
+    """
+    Send PDF pages as images to Claude vision, in batches of VISION_CHUNK_SIZE pages
+    (large scanned PDFs previously went up as one giant request and could fail or
+    truncate silently).
+    Returns (raw_rows, input_tokens, output_tokens, warnings, chunk_stats, balance_info).
+    """
     client = get_client()
     if not client:
         raise ValueError("No API key configured")
 
-    prompt = PROMPTS_VISION.get(bank, PROMPTS[bank])
-    images_b64 = pdf_to_images_b64(pdf_bytes)
-
-    content_blocks = []
-    for img_b64 in images_b64:
-        content_blocks.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": img_b64}
-        })
-    content_blocks.append({"type": "text", "text": prompt})
-
-    raw = ""
-    chunk_count = 0
+    prompt = PROMPTS_VISION.get(bank, PROMPTS[bank]) + MULTI_STATEMENT_NOTE
+    chunks = split_pdf_bytes(pdf_bytes, VISION_CHUNK_SIZE)
+    all_rows, warnings, chunk_stats, balance_objs = [], [], [], []
+    total_input = total_output = 0
     max_retries = 3
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            raw = ""
-            chunk_count = 0
-            with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=16000,
-                messages=[{"role": "user", "content": content_blocks}]
-            ) as stream:
-                for text in stream.text_stream:
-                    raw += text
-                    chunk_count += 1
-                    if stream_status and chunk_count % 50 == 0:
-                        stream_status.caption(f"Receiving response (vision) — {chunk_count} chunks so far...")
-                final_msg = stream.get_final_message()
-                input_tokens  = final_msg.usage.input_tokens
-                output_tokens = final_msg.usage.output_tokens
-            break  # success — exit retry loop
+    for ci, (page_start, page_end, chunk_bytes) in enumerate(chunks):
+        chunk_label = f" (pages {page_start}–{page_end})" if len(chunks) > 1 else ""
+        images_b64 = pdf_to_images_b64(chunk_bytes)
+        content_blocks = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
+            for img in images_b64
+        ]
+        content_blocks.append({"type": "text", "text": prompt})
 
-        except Exception as e:
-            err_str = str(e)
-            is_rate_limit = "429" in err_str or "rate_limit" in err_str
-            if is_rate_limit and attempt < max_retries:
-                wait_secs = 65
-                for remaining in range(wait_secs, 0, -1):
-                    if stream_status:
-                        stream_status.caption(
-                            f"Rate limit hit (vision) — retrying in {remaining}s "
-                            f"(attempt {attempt}/{max_retries})..."
-                        )
-                    time.sleep(1)
+        for attempt in range(1, max_retries + 1):
+            try:
+                raw = ""
+                chunk_count = 0
+                with client.messages.stream(
+                    model=MODEL,
+                    max_tokens=MAX_OUT_TOKENS,
+                    thinking={"type": "disabled"},   # deterministic extraction, no thinking spend
+                    messages=[{"role": "user", "content": content_blocks}]
+                ) as stream:
+                    for text in stream.text_stream:
+                        raw += text
+                        chunk_count += 1
+                        if stream_status and chunk_count % 50 == 0:
+                            stream_status.caption(
+                                f"Receiving response (vision{chunk_label}) — {chunk_count} chunks so far..."
+                            )
+                    final_msg = stream.get_final_message()
+                    input_tokens  = final_msg.usage.input_tokens
+                    output_tokens = final_msg.usage.output_tokens
+                    stop_reason   = final_msg.stop_reason
+                break  # success — exit retry loop
+
+            except Exception as e:
+                err_str = str(e)
+                is_rate_limit = "429" in err_str or "rate_limit" in err_str
+                if is_rate_limit and attempt < max_retries:
+                    wait_secs = 65
+                    for remaining in range(wait_secs, 0, -1):
+                        if stream_status:
+                            stream_status.caption(
+                                f"Rate limit hit (vision{chunk_label}) — retrying in {remaining}s "
+                                f"(attempt {attempt}/{max_retries})..."
+                            )
+                        time.sleep(1)
+                else:
+                    raise
+
+        total_input  += input_tokens
+        total_output += output_tokens
+
+        try:
+            if stop_reason == "max_tokens":
+                rows = _salvage_truncated_json(raw)
+                warnings.append(
+                    f"Vision pages {page_start}–{page_end}: response hit the output token limit — "
+                    f"salvaged {len(rows)} rows, some rows on these pages may be missing."
+                )
             else:
-                raise
+                rows = _parse_raw_json(raw)
+        except Exception as e:
+            rows = []
+            warnings.append(f"Vision pages {page_start}–{page_end}: could not parse response — {e}")
+
+        txns = []
+        for r in rows:
+            if isinstance(r, dict) and r.get("balance_check"):
+                balance_objs.append((ci, r))     # balance summary object, not a transaction
+                continue
+            if isinstance(r, dict):
+                r["_chunk"] = ci
+            txns.append(r)
+        chunk_stats.append((f"pages {page_start}–{page_end}", len(txns)))
+        all_rows.extend(txns)
+
+    # ── Opening/closing balances reported by the model (for the balance check) ──
+    opening = closing = None
+    for _ci, b in sorted(balance_objs, key=lambda x: x[0]):
+        try:
+            if opening is None and b.get("opening_balance") is not None:
+                opening = float(b["opening_balance"])
+            if b.get("closing_balance") is not None:
+                closing = float(b["closing_balance"])
+        except (TypeError, ValueError):
+            pass
+    balance_info = {"opening": opening, "closing": closing}
 
     if stream_status:
         stream_status.caption(
-            f"Response complete — {input_tokens} input / {output_tokens} output tokens. Parsing..."
+            f"Vision complete — {total_input} input / {total_output} output tokens. Parsing..."
         )
-    return _parse_raw_json(raw), input_tokens, output_tokens
+    return all_rows, total_input, total_output, warnings, chunk_stats, balance_info
 
 # ─── EXTRACTION — TEXT PDF MODE ───────────────────────────────────────────────
 
@@ -745,7 +842,46 @@ def _parse_raw_json(raw: str) -> list:
         raise ValueError(f"No JSON array found in Claude response. First 400 chars: {preview}")
     return json.loads(raw[start:end + 1])
 
-CHUNK_SIZE = 8  # pages per API call when splitting large PDFs
+def _salvage_truncated_json(raw: str) -> list:
+    """
+    Recover as many complete row objects as possible from a JSON array that was
+    cut off mid-stream (response hit the output token limit). Walks back to the
+    last complete object and closes the array there.
+    """
+    raw = raw.strip()
+    start = raw.find('[')
+    if start == -1:
+        return []
+    body = raw[start:]
+    while True:
+        end = body.rfind('}')
+        if end == -1:
+            return []
+        try:
+            return json.loads(body[:end + 1] + ']')
+        except Exception:
+            body = body[:end]
+
+CHUNK_SIZE = 8          # pages per API call when splitting large PDFs (text mode)
+VISION_CHUNK_SIZE = 4   # pages per API call in vision mode (images are token-heavy)
+MAX_OUT_TOKENS = 32000  # output token cap per API call (model supports up to 128K streamed)
+
+# Appended to every bank prompt so extraction never stops at a blank page, or at
+# the end of the first statement when several statements are joined in one PDF.
+MULTI_STATEMENT_NOTE = """
+
+DOCUMENT STRUCTURE — CRITICAL:
+- The PDF may contain BLANK PAGES in the middle of the document. A blank page does NOT mean the document has ended. ALWAYS continue processing every page through to the final page.
+- The file may contain MULTIPLE statements (e.g. several months or several accounts) joined back-to-back, possibly separated by blank or cover pages. Extract transactions from ALL statements present.
+- If a page has no transactions (blank page, cover page, terms and conditions), skip that page and continue with the next one.
+
+BALANCE CHECK — REQUIRED FINAL ELEMENT:
+After the LAST transaction object, append exactly ONE extra object to the array:
+{"balance_check": true, "opening_balance": <number or null>, "closing_balance": <number or null>}
+- opening_balance: the opening / brought-forward balance shown on the FIRST statement page of this document (signed number, negative if overdrawn; null if no opening balance is visible)
+- closing_balance: the closing / carried-forward balance shown on the LAST statement page of this document (signed number; null if not visible)
+- NEVER output balance lines as transaction rows — they belong only in this final object.
+Return ONLY the JSON array, nothing else."""
 
 def split_pdf_bytes(pdf_bytes: bytes, chunk_size: int = CHUNK_SIZE) -> list:
     """Split a PDF into chunks of chunk_size pages. Returns [(page_start, page_end, bytes), ...]."""
@@ -764,7 +900,9 @@ def split_pdf_bytes(pdf_bytes: bytes, chunk_size: int = CHUNK_SIZE) -> list:
     return chunks
 
 def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: str = ""):
-    """Stream a single PDF (base64) through Claude. Returns (raw_text, input_tokens, output_tokens).
+    """Stream a single PDF (base64) through Claude.
+    Returns (raw_text, input_tokens, output_tokens, stop_reason).
+    stop_reason == "max_tokens" means the response was truncated at the output cap.
     Automatically retries up to 3 times on rate limit (429) errors with a 60s wait."""
     client = get_client()
     max_retries = 3
@@ -774,8 +912,9 @@ def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: s
             raw = ""
             chunk_count = 0
             with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=16000,
+                model=MODEL,
+                max_tokens=MAX_OUT_TOKENS,
+                thinking={"type": "disabled"},   # deterministic extraction, no thinking spend
                 messages=[{
                     "role": "user",
                     "content": [
@@ -795,7 +934,8 @@ def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: s
                 final_msg = stream.get_final_message()
                 input_tokens  = final_msg.usage.input_tokens
                 output_tokens = final_msg.usage.output_tokens
-            return raw, input_tokens, output_tokens
+                stop_reason   = final_msg.stop_reason
+            return raw, input_tokens, output_tokens, stop_reason
 
         except Exception as e:
             err_str = str(e)
@@ -815,51 +955,120 @@ def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: s
 def extract_transactions(pdf_bytes: bytes, bank: str, stream_status=None):
     """
     Extract transactions from a text-layer PDF.
-    Automatically splits large PDFs into CHUNK_SIZE-page batches.
-    Returns (rows, input_tokens, output_tokens).
+    - Strips truly blank pages (no text, no images) so extraction never stalls on them.
+    - Splits large PDFs into CHUNK_SIZE-page batches.
+    - Detects output-token truncation and automatically re-splits the affected batch.
+    Returns (raw_rows, input_tokens, output_tokens, warnings, chunk_stats, balance_info).
     """
     client = get_client()
     if not client:
         raise ValueError("No API key configured")
-    prompt = PROMPTS[bank]
+    prompt = PROMPTS[bank] + MULTI_STATEMENT_NOTE
 
-    import fitz as _fitz
-    _doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_count = len(_doc)
-    _doc.close()
+    warnings, chunk_stats, balance_objs = [], [], []
 
-    if page_count <= CHUNK_SIZE:
-        pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
-        raw, input_tokens, output_tokens = _call_claude_stream(pdf_b64, prompt, stream_status)
+    # ── Strip blank pages (they used to make extraction stop early) ──────
+    pdf_bytes, blank_pages = remove_blank_pages(pdf_bytes)
+    if blank_pages:
+        pages_str = ", ".join(str(p) for p in blank_pages)
+        warnings.append(
+            f"{len(blank_pages)} blank page{'s' if len(blank_pages) != 1 else ''} "
+            f"detected (page {pages_str}) — skipped, extraction continued past them."
+        )
         if stream_status:
-            stream_status.caption(
-                f"Response complete — {input_tokens} input / {output_tokens} output tokens. Parsing..."
-            )
-        return _parse_raw_json(raw), input_tokens, output_tokens
-    else:
-        chunks = split_pdf_bytes(pdf_bytes, CHUNK_SIZE)
-        all_rows     = []
-        total_input  = 0
-        total_output = 0
-        for i, (page_start, page_end, chunk_bytes) in enumerate(chunks):
-            chunk_label = f" chunk {i + 1}/{len(chunks)} (pages {page_start}–{page_end})"
+            stream_status.caption(f"Skipping blank page(s) {pages_str} — continuing with the rest...")
+
+    if pdf_page_count(pdf_bytes) == 0:
+        raise ValueError("No readable (non-blank) pages found in this PDF.")
+
+    # ── Work queue of page batches; truncated batches get split & retried ──
+    queue = list(split_pdf_bytes(pdf_bytes, CHUNK_SIZE))
+    multi = len(queue) > 1
+    all_rows     = []
+    total_input  = 0
+    total_output = 0
+    ci = 0
+
+    while queue:
+        page_start, page_end, chunk_bytes = queue.pop(0)
+        n_pages = page_end - page_start + 1
+        chunk_label = f" pages {page_start}–{page_end}" if multi else ""
+        if stream_status and chunk_label:
+            stream_status.caption(f"Processing{chunk_label}...")
+
+        pdf_b64 = base64.standard_b64encode(chunk_bytes).decode("utf-8")
+        raw, inp, out, stop_reason = _call_claude_stream(pdf_b64, prompt, stream_status, chunk_label)
+        total_input  += inp
+        total_output += out
+
+        # ── Output hit the token cap: split this batch and redo it smaller ──
+        if stop_reason == "max_tokens" and n_pages > 1:
             if stream_status:
-                stream_status.caption(f"Processing{chunk_label}...")
-            pdf_b64 = base64.standard_b64encode(chunk_bytes).decode("utf-8")
-            raw, inp, out = _call_claude_stream(pdf_b64, prompt, stream_status, chunk_label)
-            total_input  += inp
-            total_output += out
-            try:
-                all_rows.extend(_parse_raw_json(raw))
-            except Exception as e:
-                if stream_status:
-                    stream_status.caption(f"⚠ Warning: chunk {i + 1} parse error — {e}")
-        if stream_status:
-            stream_status.caption(
-                f"All {len(chunks)} chunks done — "
-                f"{total_input} input / {total_output} output tokens. Merging..."
+                stream_status.caption(
+                    f"Response for{chunk_label or ' this file'} was cut off at the token limit — "
+                    f"splitting into smaller batches and retrying..."
+                )
+            half = (n_pages + 1) // 2
+            remapped = [
+                (page_start + s - 1, page_start + e - 1, b)
+                for s, e, b in split_pdf_bytes(chunk_bytes, half)
+            ]
+            queue[0:0] = remapped
+            multi = True
+            continue
+
+        try:
+            if stop_reason == "max_tokens":
+                rows = _salvage_truncated_json(raw)
+                warnings.append(
+                    f"Page {page_start}: response hit the output token limit even for a single page — "
+                    f"salvaged {len(rows)} rows, some may be missing."
+                )
+            else:
+                rows = _parse_raw_json(raw)
+        except Exception as e:
+            rows = []
+            warnings.append(f"Pages {page_start}–{page_end}: could not parse response — {e}")
+
+        txns = []
+        for r in rows:
+            if isinstance(r, dict) and r.get("balance_check"):
+                balance_objs.append((ci, r))     # balance summary object, not a transaction
+                continue
+            if isinstance(r, dict):
+                r["_chunk"] = ci
+            txns.append(r)
+        label = f"pages {page_start}–{page_end}" if page_start != page_end else f"page {page_start}"
+        chunk_stats.append((label, len(txns)))
+        all_rows.extend(txns)
+        ci += 1
+
+    # ── Coverage check: a batch with text but zero rows is suspicious ────
+    if len(chunk_stats) > 1:
+        zero = [lbl for lbl, n in chunk_stats if n == 0]
+        if zero and any(n > 0 for _, n in chunk_stats):
+            warnings.append(
+                "No transactions extracted from " + ", ".join(zero) +
+                " while other pages produced rows — verify those pages in the PDF."
             )
-        return all_rows, total_input, total_output
+
+    # ── Opening/closing balances reported by the model (for the balance check) ──
+    opening = closing = None
+    for _ci, b in sorted(balance_objs, key=lambda x: x[0]):
+        try:
+            if opening is None and b.get("opening_balance") is not None:
+                opening = float(b["opening_balance"])       # first batch's opening
+            if b.get("closing_balance") is not None:
+                closing = float(b["closing_balance"])       # last batch's closing
+        except (TypeError, ValueError):
+            pass
+    balance_info = {"opening": opening, "closing": closing}
+
+    if stream_status:
+        stream_status.caption(
+            f"All pages done — {total_input} input / {total_output} output tokens. Merging..."
+        )
+    return all_rows, total_input, total_output, warnings, chunk_stats, balance_info
 
 # ─── ROW PROCESSING ───────────────────────────────────────────────────────────
 
@@ -918,38 +1127,49 @@ def normalise_date(date_str: str) -> str:
 def build_rows(raw: list, bank: str) -> list:
     """
     Convert raw JSON objects from Claude into normalised row dicts.
-    Every row carries a 'reference' key (empty string for banks that don't use it).
+    Every row carries a 'reference' key (empty string for banks that don't use it) —
+    written to the CSV as its own Reference column when populated (e.g. Discovery
+    Invest fund names), instead of being merged and truncated inside Details.
     Capitec fee amounts are split into separate Service Fee rows.
+    Rows keep a '_chunk' tag (which API batch produced them) for boundary dedup.
     """
     result = []
     for r in raw:
         date      = normalise_date(r.get('date', ''))
         details   = str(r.get('details', '')).strip()
         amount    = float(r.get('amount', 0) or 0)
-        reference = str(r.get('reference', '')).strip()
-        if reference:
-            details = f"{details} / {reference}"
+        reference = str(r.get('reference', '')).strip().replace(',', ' ')
+        chunk     = r.get('_chunk', 0)
 
         details = clean_description(details)
 
         if bank == "Capitec":
             fee = float(r.get('fee', 0) or 0)
-            result.append({'date': date, 'details': details, 'amount': amount, 'reference': ''})
+            result.append({'date': date, 'details': details, 'amount': amount, 'reference': '', '_chunk': chunk})
             if fee != 0:
-                result.append({'date': date, 'details': 'Service Fee', 'amount': fee, 'reference': ''})
+                result.append({'date': date, 'details': 'Service Fee', 'amount': fee, 'reference': '', '_chunk': chunk})
         else:
-            result.append({'date': date, 'details': details, 'amount': amount, 'reference': reference})
+            result.append({'date': date, 'details': details, 'amount': amount, 'reference': reference, '_chunk': chunk})
     return result
 
-def deduplicate_rows(rows: list) -> list:
+def deduplicate_rows(rows: list):
     """
-    Remove exact duplicate rows (same date + details + amount + reference).
-    Uses a set for O(n) performance — safe for large Discovery Invest histories.
+    Remove ONLY cross-batch duplicates: the same (date, details, amount, reference)
+    appearing in two different API page-batches is almost always one transaction
+    read twice at a batch boundary.
+
+    Identical rows WITHIN one batch are KEPT — they are real repeated transactions
+    (e.g. several identical Capitec Service Fee rows or Investec electronic debit
+    fees on the same day) and must not be dropped. The previous blanket dedup
+    silently deleted those.
+
+    Returns (rows, removed_count).
     """
     if not rows:
-        return rows
-    seen   = set()
-    result = []
+        return rows, 0
+    seen_chunks = {}   # key -> set of batch ids that produced it
+    result  = []
+    removed = 0
     for r in rows:
         key = (
             r.get("date", ""),
@@ -957,17 +1177,29 @@ def deduplicate_rows(rows: list) -> list:
             str(r.get("amount", "")),
             r.get("reference", ""),
         )
-        if key not in seen:
-            seen.add(key)
-            result.append(r)
-    return result
+        chunk = r.get("_chunk", 0)
+        chunks_seen = seen_chunks.setdefault(key, set())
+        if chunks_seen and chunk not in chunks_seen:
+            removed += 1        # same row from a different batch → boundary duplicate
+            continue
+        chunks_seen.add(chunk)
+        result.append(r)
+    return result, removed
 
 def rows_to_csv_bytes(rows: list) -> bytes:
+    """Write rows to CSV. A Reference column (e.g. Discovery Invest fund name) is
+    included only when at least one row carries a reference value, so standard
+    banks keep their 3-column Pastel format."""
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Date', 'Description', 'Amount'])
-    for row in rows:
-        writer.writerow([row['date'], row['details'], row['amount']])
+    if any(r.get('reference') for r in rows):
+        writer.writerow(['Date', 'Description', 'Amount', 'Reference'])
+        for row in rows:
+            writer.writerow([row['date'], row['details'], row['amount'], row.get('reference', '')])
+    else:
+        writer.writerow(['Date', 'Description', 'Amount'])
+        for row in rows:
+            writer.writerow([row['date'], row['details'], row['amount']])
     return output.getvalue().encode('utf-8')
 
 def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
@@ -1150,7 +1382,7 @@ if st.session_state.all_rows:
             f'<div class="stat-card">'
             f'<div class="stat-number" style="font-size:18px;">R{s_zar:.3f}</div>'
             f'<div class="stat-label">Session Cost</div>'
-            f'<div style="font-size:10px;color:#2a4a2a;margin-top:2px;">'
+            f'<div style="font-size:10px;color:#8a9ab8;margin-top:2px;">'
             f'${s_usd:.4f} · R{USD_ZAR_RATE}/$ avg'
             f'</div></div>',
             unsafe_allow_html=True
@@ -1172,7 +1404,9 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     for uf in uploaded_files:
         if uf.name not in st.session_state.cached_upload_bytes:
-            st.session_state.cached_upload_bytes[uf.name] = uf.read()
+            # getvalue() (not read()) — read() returns b'' once the buffer pointer
+            # is exhausted, which broke re-processing after the cache was cleared
+            st.session_state.cached_upload_bytes[uf.name] = uf.getvalue()
     current_names = {uf.name for uf in uploaded_files}
     st.session_state.cached_upload_bytes = {
         k: v for k, v in st.session_state.cached_upload_bytes.items()
@@ -1186,7 +1420,11 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
     files_to_process = st.session_state.confirmed_files
 
     total_files = len(files_to_process)
-    est_seconds = total_files * 25
+    # Estimate from actual page counts (~4s per page, min 15s per file)
+    est_seconds = sum(
+        max(15, (f.get('page_end', 4) - f.get('page_start', 1) + 1) * 4)
+        for f in files_to_process
+    )
     est_str     = f"{est_seconds // 60}m {est_seconds % 60}s" if est_seconds >= 60 else f"~{est_seconds}s"
 
     st.markdown(f"#### Extracting {total_files} file{'s' if total_files > 1 else ''} as {confirmed_bank}")
@@ -1199,7 +1437,7 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
     for i, file_data in enumerate(files_to_process):
         file_start   = time.time()
         elapsed      = time.time() - start_all
-        avg_per_file = (elapsed / i) if i > 0 else 25
+        avg_per_file = (elapsed / i) if i > 0 else (est_seconds / total_files)
         est_remaining = int(avg_per_file * (total_files - i))
         est_rem_str  = (
             f"{est_remaining // 60}m {est_remaining % 60}s"
@@ -1237,23 +1475,52 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 stream_status.caption("Converting pages to images...")
                 timing.caption(f"{eta_label}  |  Vision mode (~45s per file)")
                 try:
-                    raw, inp_tok, out_tok = extract_transactions_vision(
+                    raw, inp_tok, out_tok, extract_warnings, chunk_stats, balance_info = extract_transactions_vision(
                         pdf_bytes, effective_bank, stream_status=stream_status
                     )
                     vision_used = True
                 except Exception as ve:
                     raise ValueError(f"VISION_FAILED: {ve}")
             else:
-                raw, inp_tok, out_tok = extract_transactions(
+                raw, inp_tok, out_tok, extract_warnings, chunk_stats, balance_info = extract_transactions(
                     pdf_bytes, effective_bank, stream_status=stream_status
                 )
                 vision_used = False
 
             # ── Post-process rows ─────────────────────────────────────────
-            rows     = build_rows(raw, effective_bank)
-            rows     = deduplicate_rows(rows)
+            rows              = build_rows(raw, effective_bank)
+            rows, dup_removed = deduplicate_rows(rows)
+            if dup_removed:
+                extract_warnings.append(
+                    f"{dup_removed} duplicate row{'s' if dup_removed != 1 else ''} removed "
+                    f"(same transaction read twice at a page-batch boundary)."
+                )
             fee_rows = sum(1 for r in rows if r['details'] == 'Service Fee')
             txn_rows = len(rows) - fee_rows
+
+            # ── Balance cross-check: opening + sum(transactions) ≈ closing ──
+            balance_check = {'status': 'unavailable'}
+            b_open  = balance_info.get('opening')
+            b_close = balance_info.get('closing')
+            if b_open is not None and b_close is not None:
+                txn_sum  = round(sum(r['amount'] for r in rows), 2)
+                expected = round(b_close - b_open, 2)
+                diff     = round(txn_sum - expected, 2)
+                balance_check = {
+                    'status':   'ok' if abs(diff) <= 0.05 else 'fail',
+                    'opening':  b_open,
+                    'closing':  b_close,
+                    'txn_sum':  txn_sum,
+                    'expected': expected,
+                    'diff':     diff,
+                }
+                if balance_check['status'] == 'fail':
+                    extract_warnings.append(
+                        f"Balance check FAILED: extracted transactions sum to R{txn_sum:,.2f}, but the "
+                        f"statement balances move by R{expected:,.2f} (opening R{b_open:,.2f} → closing "
+                        f"R{b_close:,.2f}). Difference of R{diff:,.2f} — rows may be missing or duplicated. "
+                        f"Verify the CSV before importing."
+                    )
 
             # ── Sanity check: very few rows for a multi-page document ─────
             pages_processed  = (pe - ps + 1) if page_clipped else tp
@@ -1297,6 +1564,9 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 'sanity_warn':    sanity_warn,
                 'page_range':     f"{ps}–{pe}" if page_clipped else None,
                 'total_pages':    tp,
+                'warnings':       extract_warnings,
+                'chunk_stats':    chunk_stats,
+                'balance_check':  balance_check,
             })
             st.session_state.all_rows.extend(rows)
 
@@ -1339,6 +1609,9 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 'sanity_warn':    False,
                 'page_range':     None,
                 'total_pages':    file_data.get('total_pages', 0),
+                'warnings':       [],
+                'chunk_stats':    [],
+                'balance_check':  {'status': 'unavailable'},
             })
 
         progress.progress((i + 1) / total_files)
@@ -1406,12 +1679,17 @@ elif uploaded_files:
             n_pages = pdf_page_count(fb) if fb else 0
             n_pages = max(n_pages, 1)
 
+            # Blank pages (e.g. between two statements) — flagged so the user
+            # knows extraction will continue past them instead of stopping
+            blank_pages = find_blank_pages(fb) if fb else []
+
             file_meta.append({
                 'name':     f.name,
                 'icon':     icon,
                 'note':     note,
                 'dup_name': dup_name,
                 'pages':    n_pages,
+                'blanks':   blank_pages,
                 'bytes':    fb,
             })
 
@@ -1425,16 +1703,29 @@ elif uploaded_files:
                     're-processing will create duplicate rows in the combined CSV.'
                     '</div>'
                 )
+            blank_html = ""
+            if fm.get('blanks'):
+                pages_str = ", ".join(str(p) for p in fm['blanks'])
+                blank_html = (
+                    '<div style="color:#bf8a4a;font-size:10px;margin-top:3px;">'
+                    f'{len(fm["blanks"])} blank page{"s" if len(fm["blanks"]) != 1 else ""} detected '
+                    f'(page {pages_str}) — extraction will continue past them.'
+                    '</div>'
+                )
+            bank_color = BANK_COLORS.get(selected_bank, "#1a2f5e")
             st.markdown(
-                f'<div style="background:#0d0d0d; border:1px solid #1a2a1a; border-radius:6px; '
-                f'padding:10px 14px; margin-bottom:6px; display:flex; gap:12px; align-items:flex-start;">'
+                f'<div style="background:#ffffff; border:1px solid #d0d8e8; '
+                f'border-left:4px solid {bank_color}; border-radius:6px; '
+                f'padding:10px 14px; margin-bottom:6px; display:flex; gap:12px; align-items:flex-start; '
+                f'box-shadow:0 2px 8px rgba(26,47,94,0.06);">'
                 f'<span style="font-size:17px;margin-top:2px">{fm["icon"]}</span>'
                 f'<div style="flex:1">'
-                f'<div style="color:#ffffff;font-size:13px">{fm["name"]}'
-                f'<span style="color:#3a5a3a;font-size:10px;margin-left:10px;">{fm["pages"]} page{"s" if fm["pages"] != 1 else ""}</span>'
+                f'<div style="color:#1a2f5e;font-size:13px;font-weight:600">{fm["name"]}'
+                f'<span style="color:#8a9ab8;font-size:10px;margin-left:10px;font-weight:400">{fm["pages"]} page{"s" if fm["pages"] != 1 else ""}</span>'
                 f'</div>'
-                f'<div style="color:#4a6a4a;font-size:11px;margin-top:2px">{fm["note"]}</div>'
+                f'<div style="color:#3a5080;font-size:11px;margin-top:2px">{fm["note"]}</div>'
                 f'{dup_html}'
+                f'{blank_html}'
                 f'</div></div>',
                 unsafe_allow_html=True
             )
@@ -1484,90 +1775,82 @@ elif uploaded_files:
 
 
         max_pages = max(fm['pages'] for fm in file_meta)
-        page_info = {fm['name']: fm['pages'] for fm in file_meta}
 
+        # Page ranges are PER FILE — trimming one file no longer trims every
+        # other file in the batch.
         # Discovery Invest: page range MANDATORY — blank defaults, confirm locked.
         # All other banks: optional expander, defaults to full document.
         discovery_mode = selected_bank in DISCOVERY_BANKS
-        range_ready    = False  # will be set to True when conditions are met
+        range_ready    = True
+        page_ranges    = {}   # filename -> (start_page, end_page)
+
+        def _range_inputs(fm, mandatory: bool):
+            """Render start/end page inputs for one file. Returns (start, end) or None."""
+            n = fm['pages']
+            if len(file_meta) > 1:
+                st.markdown(f"**{fm['name']}** — {n} page{'s' if n != 1 else ''}")
+            col_ps, col_pe = st.columns(2)
+            with col_ps:
+                ps_raw = st.number_input(
+                    "Start page", min_value=1, max_value=n,
+                    value=None if mandatory else 1, step=1,
+                    key=f"page_start_{fm['name']}",
+                    placeholder="e.g. 10" if mandatory else None
+                )
+            with col_pe:
+                pe_raw = st.number_input(
+                    "End page", min_value=1, max_value=n,
+                    value=None if mandatory else n, step=1,
+                    key=f"page_end_{fm['name']}",
+                    placeholder="e.g. 25" if mandatory else None
+                )
+            if ps_raw is None or pe_raw is None:
+                st.warning("⚠ Enter both a start and end page to enable the Confirm button.")
+                return None
+            ps_v, pe_v = int(ps_raw), int(pe_raw)
+            if ps_v > pe_v:
+                st.error("Start page must be ≤ end page.")
+                return None
+            pages_in_range = pe_v - ps_v + 1
+            if pages_in_range < n:
+                skip_pct = round((1 - pages_in_range / n) * 100)
+                st.caption(
+                    f"Will process pages {ps_v}–{pe_v} "
+                    f"({pages_in_range} page{'s' if pages_in_range != 1 else ''}, "
+                    f"~{skip_pct}% fewer pages sent to API)."
+                )
+            else:
+                st.caption("Full document will be processed (no trimming).")
+            return ps_v, pe_v
 
         if discovery_mode:
             st.markdown("**Page range — required for Discovery Invest**")
             st.caption(
-                f"This document has **{max_pages} pages**. "
-                "Enter a start and end page before processing to avoid sending "
-                "the entire document to the API (which causes a request-too-large error)."
+                "Enter a start and end page for each file before processing to avoid "
+                "sending the entire document to the API (which causes a request-too-large error)."
             )
-            col_ps, col_pe = st.columns(2)
-            with col_ps:
-                page_start_raw = st.number_input(
-                    "Start page", min_value=1, max_value=max_pages,
-                    value=None, step=1, key="page_start_input",
-                    placeholder="e.g. 10"
-                )
-            with col_pe:
-                page_end_raw = st.number_input(
-                    "End page", min_value=1, max_value=max_pages,
-                    value=None, step=1, key="page_end_input",
-                    placeholder="e.g. 25"
-                )
-
-            page_start_val = int(page_start_raw) if page_start_raw is not None else None
-            page_end_val   = int(page_end_raw)   if page_end_raw   is not None else None
-
-            if page_start_val is None or page_end_val is None:
-                st.warning("⚠ Enter both a start and end page to enable the Confirm button.")
-                range_ready = False
-            elif page_start_val > page_end_val:
-                st.error("Start page must be ≤ end page.")
-                range_ready = False
-            else:
-                pages_in_range = page_end_val - page_start_val + 1
-                skip_pct = round((1 - pages_in_range / max_pages) * 100)
-                st.caption(
-                    f"Will process pages {page_start_val}–{page_end_val} "
-                    f"({pages_in_range} page{'s' if pages_in_range != 1 else ''}, "
-                    f"~{skip_pct}% of document)."
-                )
-                range_ready = True
-
+            for fm in file_meta:
+                if len(file_meta) == 1:
+                    st.caption(f"This document has **{fm['pages']} pages**.")
+                rng = _range_inputs(fm, mandatory=True)
+                if rng is None:
+                    range_ready = False
+                else:
+                    page_ranges[fm['name']] = rng
         else:
-            page_start_val = 1
-            page_end_val   = max_pages
-            range_ready    = True
-
+            for fm in file_meta:
+                page_ranges[fm['name']] = (1, fm['pages'])
             if max_pages > 8:
                 with st.expander(
                     f"📄 Page range — trim large documents "
                     f"(largest file: {max_pages} pages, optional)"
                 ):
-                    if len(file_meta) > 1:
-                        for fname, n in page_info.items():
-                            st.caption(f"{fname}: {n} page{'s' if n != 1 else ''}")
-                    col_ps, col_pe = st.columns(2)
-                    with col_ps:
-                        page_start_val = st.number_input(
-                            "Start page", min_value=1, max_value=max_pages,
-                            value=1, step=1, key="page_start_input"
-                        )
-                    with col_pe:
-                        page_end_val = st.number_input(
-                            "End page", min_value=1, max_value=max_pages,
-                            value=max_pages, step=1, key="page_end_input"
-                        )
-                    if page_start_val > page_end_val:
-                        st.error("Start page must be ≤ end page.")
-                        range_ready = False
-                    else:
-                        pages_in_range = page_end_val - page_start_val + 1
-                        if pages_in_range < max_pages:
-                            skip_pct = round((1 - pages_in_range / max_pages) * 100)
-                            st.caption(
-                                f"Will process pages {page_start_val}–{page_end_val} "
-                                f"(~{skip_pct}% fewer pages sent to API, lower cost)."
-                            )
+                    for fm in file_meta:
+                        rng = _range_inputs(fm, mandatory=False)
+                        if rng is None:
+                            range_ready = False
                         else:
-                            st.caption("Full document will be processed (no trimming).")
+                            page_ranges[fm['name']] = rng
 
         # ── Cost and POPIA reminders ──────────────────────────────────────
         st.info(
@@ -1589,11 +1872,12 @@ elif uploaded_files:
                 confirmed_file_list = []
                 for fm in file_meta:
                     tp = fm['pages']
+                    ps_v, pe_v = page_ranges.get(fm['name'], (1, tp))
                     confirmed_file_list.append({
                         'name':          fm['name'],
                         'bytes':         fm['bytes'],
-                        'page_start':    page_start_val,
-                        'page_end':      min(page_end_val, tp),
+                        'page_start':    ps_v,
+                        'page_end':      min(pe_v, tp),
                         'total_pages':   tp,
                         'effective_bank':effective_bank,
                         'section_label': section_label,
@@ -1659,6 +1943,19 @@ with tab_results:
                             "or the statement format has changed. "
                             "**Verify the downloaded CSV before importing.**"
                         )
+                    if f.get('chunk_stats') and len(f['chunk_stats']) > 1:
+                        st.caption(
+                            "Extraction coverage:  " +
+                            "  ·  ".join(f"{lbl}: {n} rows" for lbl, n in f['chunk_stats'])
+                        )
+                    bc = f.get('balance_check') or {}
+                    if bc.get('status') == 'ok':
+                        st.caption(
+                            f"✓ Balance check passed — opening R{bc['opening']:,.2f} "
+                            f"+ transactions R{bc['txn_sum']:,.2f} = closing R{bc['closing']:,.2f}"
+                        )
+                    for w in f.get('warnings', []):
+                        st.warning(f"⚠ {w}")
                 else:
                     st.error(f"**{f['name']}** [{bank_label}] — {f.get('error', 'Unknown error')}")
             with col_b:
@@ -1747,12 +2044,12 @@ with tab_results:
     elif not uploaded_files and not st.session_state.confirmed_files:
         banks_str = " · ".join(BANK_LIST)
         st.markdown(
-            f'<div style="text-align:center; padding:60px 40px; color:#2a2a2a; '
-            f'border:2px dashed #1a1a1a; border-radius:12px; margin-top:20px;">'
-            f'<div style="font-size:16px;color:#444;margin-bottom:8px;margin-top:8px;">'
+            f'<div style="text-align:center; padding:60px 40px; background:#ffffff; '
+            f'border:2px dashed #b0bdd4; border-radius:12px; margin-top:20px;">'
+            f'<div style="font-size:16px;color:#1a2f5e;margin-bottom:8px;margin-top:8px;">'
             f'Select your bank in the sidebar, then upload PDF statements</div>'
-            f'<div style="font-size:12px;color:#333;">{banks_str}</div>'
-            f'<div style="font-size:12px;margin-top:8px;">'
+            f'<div style="font-size:12px;color:#6a80a8;">{banks_str}</div>'
+            f'<div style="font-size:12px;color:#8a9ab8;margin-top:8px;">'
             f'Output: Date · Details · Amount (signed) · Pastel-ready  ·  El Imperio Accountants</div>'
             f'</div>',
             unsafe_allow_html=True
@@ -1762,11 +2059,11 @@ with tab_results:
 with tab_history:
     if not st.session_state.history:
         st.markdown(
-            '<div style="text-align:center; padding:60px 40px; color:#2a2a2a; '
-            'border:2px dashed #1a1a1a; border-radius:12px; margin-top:20px;">'
-            '<div style="font-size:16px;color:#444;margin-bottom:8px;margin-top:8px;">'
+            '<div style="text-align:center; padding:60px 40px; background:#ffffff; '
+            'border:2px dashed #b0bdd4; border-radius:12px; margin-top:20px;">'
+            '<div style="font-size:16px;color:#1a2f5e;margin-bottom:8px;margin-top:8px;">'
             'No history yet — completed sessions will appear here</div>'
-            '<div style="font-size:12px;color:#333;">Last 3 sessions are saved automatically</div>'
+            '<div style="font-size:12px;color:#6a80a8;">Last 3 sessions are saved automatically</div>'
             '</div>',
             unsafe_allow_html=True
         )

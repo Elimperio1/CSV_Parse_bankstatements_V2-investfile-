@@ -43,17 +43,19 @@ cd sa-bank-csv
 pip install -r requirements.txt
 ```
 
-### 2. Add your Anthropic API key
+### 2. Add your secrets
 
-```bash
-mkdir -p .streamlit
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# Edit .streamlit/secrets.toml and paste your key
-```
+Create `.streamlit/secrets.toml` in the project root:
 
-`.streamlit/secrets.toml`:
 ```toml
 ANTHROPIC_API_KEY = "sk-ant-api03-..."
+
+# Google Sheets auth + usage logging
+GOOGLE_SHEET_ID = "your-sheet-id"
+GOOGLE_SERVICE_ACCOUNT = """{ ...service account JSON... }"""
+
+# Optional: comma-separated login bypass codes (omit to disable bypass login)
+LOGIN_BYPASS_CODES = "YOURCODE"
 ```
 
 **Never commit `secrets.toml` to Git.** It is already in `.gitignore`.
@@ -81,9 +83,14 @@ streamlit run app.py
 ## Features
 
 - **Multi-bank support** — one dropdown, one workflow
-- **Scanned PDF detection** — automatically switches to vision (image) mode if no text layer found
-- **Large PDF chunking** — statements over 8 pages are split and merged automatically
-- **Page range selector** — trim large Discovery Invest histories to a specific page range before sending (reduces API cost)
+- **Blank-page tolerant** — truly blank pages (e.g. between two statements joined in one PDF) are detected, stripped, and extraction continues to the last page
+- **Multi-statement PDFs** — several statements concatenated in one file are all extracted
+- **Balance cross-check** — opening balance + sum of extracted transactions is verified against the closing balance; a mismatch shows a warning with the difference
+- **Truncation-safe** — responses cut off at the output token limit are detected and the affected pages are automatically re-sent in smaller batches
+- **Scanned PDF detection** — automatically switches to vision (image) mode if no text layer found; vision requests are batched 4 pages at a time
+- **Large PDF chunking** — statements over 8 pages are split and merged automatically, with per-batch row counts shown in the results
+- **Boundary-safe dedup** — only duplicates read twice at a page-batch boundary are removed; real repeated transactions (identical same-day fees) are kept
+- **Per-file page ranges** — trim each file to its own page range before sending (reduces API cost)
 - **Hash-based duplicate detection** — warns if the same file is uploaded again in the same session
 - **Sanity warning** — alerts if very few rows were extracted relative to document size
 - **Month-by-month download** — download a specific month's transactions without re-processing
@@ -108,7 +115,7 @@ This notice does not constitute legal advice. Consult a POPIA-qualified attorney
 
 ## API Cost Estimates
 
-Based on `claude-sonnet-4-6` pricing (as at March 2026):
+Based on `claude-sonnet-5` pricing (standard $3/$15 per MTok; an intro discount of $2/$10 applies until 31 Aug 2026, so real costs are lower until then). Note: sonnet-5's tokenizer produces ~30% more tokens per statement than sonnet-4-6, so token counts are higher at the same per-token price.
 
 | Statement type | Approx. cost (USD) |
 |---|---|

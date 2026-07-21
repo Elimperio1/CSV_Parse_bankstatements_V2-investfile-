@@ -4,9 +4,22 @@ from google.oauth2.service_account import Credentials
 import json
 from datetime import datetime
 
-BYPASS_CODES = {"BYPASSTEST", "LOGINBYPASSTEST", "bypasstest"}
+def get_bypass_codes() -> set:
+    """
+    Login bypass codes come from secrets instead of being hardcoded in source
+    (hardcoded codes in a public repo let anyone log in).
+    Add to .streamlit/secrets.toml / Streamlit Cloud secrets to enable:
+        LOGIN_BYPASS_CODES = "CODE1, CODE2"
+    Omit the secret entirely to disable bypass login.
+    """
+    try:
+        raw = st.secrets.get("LOGIN_BYPASS_CODES", "")
+        return {c.strip().upper() for c in str(raw).split(",") if c.strip()}
+    except Exception:
+        return set()
 
 
+@st.cache_resource(show_spinner=False)
 def get_gspread_client():
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -29,8 +42,8 @@ def get_gspread_client():
 def verify_user(email_input: str) -> dict:
     raw = email_input.strip()
 
-    if raw.upper() in {c.upper() for c in BYPASS_CODES}:
-        return {"email": "bypass@elimpeiro.co.za", "name": "Admin", "authorized": True}
+    if raw.upper() in get_bypass_codes():
+        return {"email": "bypass@elimperio.co.za", "name": "Admin", "authorized": True}
 
     target_email = raw.lower()
 
