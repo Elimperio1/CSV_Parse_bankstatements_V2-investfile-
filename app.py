@@ -1273,33 +1273,6 @@ with st.sidebar:
     show_sidebar_user()
     st.markdown("---")
 
-    st.markdown("**Select Bank**")
-    selected_bank = st.selectbox(
-        "Bank", BANK_LIST,
-        label_visibility="collapsed", key="selected_bank"
-    )
-    st.markdown("---")
-
-    st.markdown("**Output format**")
-    if selected_bank in BANKS_WITH_REFERENCE:
-        st.caption("Date · Details · Amount · Reference (Fund Name)")
-    else:
-        st.caption("Date · Details · Amount")
-    st.caption("Signed amount: positive = money in, negative = money out")
-    st.markdown("---")
-
-    if selected_bank == "Capitec":
-        st.markdown("**Capitec fee rows**")
-        st.caption("Fees are automatically split into separate **Service Fee** rows.")
-        st.markdown("---")
-
-    if selected_bank == "Discovery Invest":
-        st.markdown("**Discovery Invest**")
-        st.caption("Transaction Details: Date · Description · Amount · Fund Name. Units column stripped.")
-        st.caption("Payment Summary: Date · Description · Net Payment (as negative withdrawal).")
-        st.caption("Select the section type in the confirmation panel before processing.")
-        st.markdown("---")
-
     st.markdown("**Pastel tip**")
     st.caption("Date + Details + Amount maps directly into Pastel's import format.")
     st.markdown("---")
@@ -1388,6 +1361,33 @@ if st.session_state.all_rows:
             unsafe_allow_html=True
         )
     st.markdown("")
+
+# ─── BANK SELECTION (main page) ───────────────────────────────────────────────
+
+st.markdown("#### Select Bank")
+col_bank, col_fmt = st.columns([1, 2])
+with col_bank:
+    selected_bank = st.selectbox(
+        "Bank", BANK_LIST,
+        label_visibility="collapsed", key="selected_bank"
+    )
+with col_fmt:
+    if selected_bank in BANKS_WITH_REFERENCE:
+        st.caption("Output: Date · Details · Amount · Reference (Fund Name)")
+    else:
+        st.caption("Output: Date · Details · Amount")
+    st.caption("Signed amount: positive = money in, negative = money out")
+
+if selected_bank == "Capitec":
+    st.caption("Capitec fees are automatically split into separate **Service Fee** rows.")
+if selected_bank == "Discovery Invest":
+    st.caption(
+        "**Discovery Invest** — Transaction Details: Date · Description · Amount · Fund Name "
+        "(Units column stripped)  ·  Payment Summary: Date · Description · Net Payment "
+        "(negative withdrawals). Select the section type in the confirmation panel."
+    )
+
+st.markdown("")
 
 # ─── UPLOAD ───────────────────────────────────────────────────────────────────
 
@@ -1734,7 +1734,7 @@ elif uploaded_files:
             st.warning(
                 "One or more files may not match the selected bank. "
                 "Processing with the wrong prompt wastes API tokens and gives bad results. "
-                "Switch the bank in the sidebar, or confirm below to proceed anyway."
+                "Switch the bank in the selector above, or confirm below to proceed anyway."
             )
 
         # ── Section type selector — Discovery Invest only ─────────────────
@@ -2047,7 +2047,7 @@ with tab_results:
             f'<div style="text-align:center; padding:60px 40px; background:#ffffff; '
             f'border:2px dashed #b0bdd4; border-radius:12px; margin-top:20px;">'
             f'<div style="font-size:16px;color:#1a2f5e;margin-bottom:8px;margin-top:8px;">'
-            f'Select your bank in the sidebar, then upload PDF statements</div>'
+            f'Select your bank above, then upload PDF statements</div>'
             f'<div style="font-size:12px;color:#6a80a8;">{banks_str}</div>'
             f'<div style="font-size:12px;color:#8a9ab8;margin-top:8px;">'
             f'Output: Date · Details · Amount (signed) · Pastel-ready  ·  El Imperio Accountants</div>'
