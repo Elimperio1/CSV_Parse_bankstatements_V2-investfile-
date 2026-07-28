@@ -188,6 +188,8 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     background: #1a2f5e !important;
     color: #ffffff !important;
 }
+.stButton > button:hover p,
+.stButton > button:hover span { color: #ffffff !important; }
 .stDownloadButton > button {
     background: #1a2f5e !important;
     color: #ffffff !important;
@@ -197,6 +199,13 @@ div[data-testid="stExpander"] p         { color: #1a2f5e !important; }
     font-weight: 500 !important;
     width: 100%;
 }
+/* The global "p, li, span, label" navy rule wins over the button's own color
+   on the text nodes inside the button — force white on everything inside. */
+.stDownloadButton button p,
+.stDownloadButton button span,
+.stDownloadButton button div,
+[data-testid="stDownloadButton"] button p,
+[data-testid="stDownloadButton"] button span { color: #ffffff !important; }
 .stDownloadButton > button:hover {
     background: #0f1f42 !important;
 }
@@ -342,6 +351,103 @@ FEE ROWS (lines starting with "#" e.g. "#Monthly Account Fee", "#Service Fees"):
 
 Return ONLY the JSON array, nothing else.""",
 
+"FNB Credit Card": """You are a bank statement parser. Your ONLY output must be a valid JSON array. No explanation, no markdown, no code fences, no preamble, no postamble — just the raw JSON array starting with [ and ending with ].
+
+TASK: Extract every transaction from this FNB Business Credit Card statement.
+
+PAGES TO IGNORE COMPLETELY:
+- The "Account Summary" page (first page): lines like "Balance Brought Forward", "Payment Received", "Transactions", "Budget Interest", "Total Outstanding Balance", "Credit Limit", interest rates. These are summary figures, NOT transactions — never output them as rows.
+- The "Expense Summary" page: a matrix of spend categories (Airlines, Hotels, Car Hire, Entertainment, Shops, Fuel, Interest, Fees, VAT, Total Expenses …) against ~13 month columns (Feb 2024, Mar 2024 … Jan 2025). Every number on that page is a historical monthly total, NOT a transaction. Output NOTHING from this page.
+- Transaction pages are the ones headed "Tran Date | Transaction Details | Credit Facility | Budget Facility".
+
+THE TRANSACTION TABLE HAS FIVE COLUMNS (left to right):
+  Column 1: Tran Date        — always "DD Mon" e.g. "30 Jan", "03 Feb"
+  Column 2: Merchant         — the merchant / narrative text, starts at the far left of the details area
+  Column 3: Town/Reference   — the merchant's town, or a reference code. Starts about HALFWAY across the details area, at the same horizontal position on every row.
+  Column 4: Credit Facility  — the transaction amount
+  Column 5: Budget Facility  — usually 0.00 / empty
+
+THE PRINTED HEADER IS MISLEADING — READ THIS TWICE:
+The statement prints ONE header, "Transaction Details", above BOTH Column 2 and Column 3. They are NOT one field. They are two separate columns with a wide gap of whitespace between them, and Column 3 always begins at the same horizontal position down the whole page. You MUST split them.
+
+A row is a transaction ONLY if it starts with a "DD Mon" date in Column 1. Anything without a "DD Mon" date is a heading, subtotal or summary line — skip it.
+
+Each object must have exactly these keys:
+- "date": string DD/MM/YYYY — see DATE RULES below
+- "details": string — Column 2 ONLY. Strip a leading "#" (e.g. "#Declined Auth Fee" → "Declined Auth Fee").
+- "reference": string — Column 3 ONLY, exactly as printed. Empty string "" if Column 3 is blank on that row.
+- "amount": number — see AMOUNT RULES below
+
+SPLITTING COLUMN 2 FROM COLUMN 3 — WORKED EXAMPLES:
+  "29 Jan  Mozambique Haarties      Pretoria         1 030.00"
+      → {"date":"29/01/2025","details":"Mozambique Haarties","reference":"Pretoria","amount":-1030.00}
+  "30 Jan  Payu * Uct Student F     Cape Town       35 000.00"
+      → {"date":"30/01/2025","details":"Payu * Uct Student F","reference":"Cape Town","amount":-35000.00}
+  "30 Jan  1sa Trf                  Vodsbz6j7 85M   25 000.00 Cr"
+      → {"date":"30/01/2025","details":"1sa Trf","reference":"Vodsbz6j7 85M","amount":25000.00}
+  "30 Jan  #Int Pymt Fee-google *Yo Utube Music         1.80"
+      → {"date":"30/01/2025","details":"Int Pymt Fee-google *Yo","reference":"Utube Music","amount":-1.80}
+  "26 Feb  Interest                                 4 615.57"
+      → {"date":"26/02/2025","details":"Interest","reference":"","amount":-4615.57}
+  "30 Jan  Intuit *Qbooks Online    800-446-8848 CA   276.00"
+      → {"date":"30/01/2025","details":"Intuit *Qbooks Online","reference":"800-446-8848 CA","amount":-276.00}
+
+COMMON MISTAKE — DO NOT MAKE IT:
+- Do NOT concatenate Column 3 onto the end of "details". "Mozambique Haarties Pretoria" is WRONG; "Mozambique Haarties" with reference "Pretoria" is RIGHT.
+- Column 2 text is often cut off mid-word and Column 3 looks like it continues the word (e.g. "#Int Pymt Fee-google *Yo" + "Utube Music", "#Int Pymt Fee-netflix.Co" + "M"). It does NOT — they are still two separate columns. Keep them apart exactly as printed.
+- EVERY object you output must contain a "reference" key. Use "" when Column 3 is blank, never omit the key.
+
+AMOUNT RULES:
+- Read the Credit Facility column. If that column is empty for a row and Budget Facility has a value, read Budget Facility instead.
+- The thousands separator on this statement is a SPACE, not a comma: "1 030.00" is 1030.00 and "35 000.00" is 35000.00. Strip ALL spaces and commas from the number before converting.
+- If the number is followed by "Cr" (with or without a space, e.g. "25 000.00 Cr") it is POSITIVE — money paid into the card.
+- If there is no "Cr" suffix it is NEGATIVE — a purchase, fee or interest charge that increases the amount owed.
+- Examples: "1 030.00" → -1030.00 · "35 000.00" → -35000.00 · "25 000.00 Cr" → 25000.00 · "4 615.57" → -4615.57
+
+DATE RULES:
+- Dates are "DD Mon" with NO year. Get the statement month/year from the "Statement Date" on the first page, e.g. "26 February 2025".
+- A transaction whose month is the SAME as or EARLIER than the statement month belongs to the statement year.
+- A transaction whose month is LATER than the statement month belongs to the PREVIOUS year. Example: on a statement dated 26 January 2025, a "28 Dec" row is 28/12/2024.
+- Output as DD/MM/YYYY, e.g. "30 Jan" on a 26 February 2025 statement → "30/01/2025".
+
+ROW ORDER — CRITICAL:
+- These transactions are NOT in chronological order. The statement lists blocks: international-payment fee rows first, then purchases in date order, then a block of payment/transfer credits that RESTARTS at the beginning of the period.
+- This is normal. Extract every row in the order it is printed. Do NOT reorder, do NOT skip a row because its date is earlier than the row above it.
+
+THE SUMMARY BLOCK IS NOT THE END — CRITICAL:
+- On the last transaction page a summary block appears ("Total Transactions", "Total Card Balance", "Amount Due (Transferred)", "Closing Balance", "Total Outstanding Balance").
+- MORE TRANSACTION ROWS APPEAR AFTER IT. Keep reading to the bottom of the page. Do NOT stop at "Closing Balance".
+
+SKIP these lines (they are balances, headings or totals, never transactions):
+- "Balance Brought Forward" (there may be two — one per account)
+- Card number / limit lines, e.g. "4790 81** **** 4005 (Revolver) - Limits  250 000.00"
+- The cardholder name printed on its own as a section heading, e.g. "Mnr Ockert J Van Schalkwyk"
+- "Items marked # are inclusive of VAT."
+- "Total Transactions", "Total Card Balance", "Amount Due (Transferred)", "Closing Balance", "Total Outstanding Balance"
+- Column headers and page footers
+
+SKIP ONE MORE ROW — THE INTERNAL TRANSFER:
+- Near the end there is a dated row whose Transaction Details is the CARDHOLDER'S NAME (e.g. "26 Feb  Mnr Ockert J Van Sc") and whose amount equals the "Total Card Balance" figure exactly.
+- This is an internal transfer of the card balance onto the control account, not a real transaction. Including it would double-count the whole statement. DO NOT output it.
+
+KEEP this row:
+- "Payment - Thank You" (e.g. "03 Feb  Payment - Thank You  24 307.00 Cr") IS a real transaction — the payment received for the previous statement. Output it as a POSITIVE amount.
+
+BALANCE CHECK VALUES FOR THIS STATEMENT TYPE — this OVERRIDES the general balance-check wording that follows. Pick these two figures carefully, several similar-looking numbers appear elsewhere:
+- "opening_balance": the "Balance Brought Forward" under **Credit Facility** on the Account Summary page (the FIRST page) — e.g. 243060.49.
+  · NOT the "Balance Brought Forward" under Unsecured Budget Facility (usually 0.00).
+  · NOT either of the "Balance Brought Forward" figures printed at the top of the transaction pages (those are per-account splits of it, e.g. 24307.00 and 218753.49).
+  Output it as a POSITIVE number — it is the amount owed on the card.
+- "closing_balance": the "Total Outstanding Balance" under **Credit Facility** — e.g. 249654.19. Also POSITIVE.
+  · NOT "Closing Balance" (that figure is after the next month's sweep).
+  · NOT "Total Card Balance", and NOT the Budget Facility 0.00 beside it.
+
+OUTPUT SHAPE — every transaction object has FOUR keys, in this order:
+{"date": "29/01/2025", "details": "Mozambique Haarties", "reference": "Pretoria", "amount": -1030.00}
+The "reference" key is REQUIRED on every object. Never fold it into "details".
+
+Return ONLY the JSON array, nothing else.""",
+
 "ABSA": """You are a bank statement parser. Extract ALL transactions from this ABSA bank statement.
 
 Return ONLY a valid JSON array. No markdown, no code fences, no explanation.
@@ -385,7 +491,17 @@ Each object must have exactly these keys:
 - "amount": number (negative = money out, positive = money in)
 
 DATE RULES:
-- Dates appear as "MM DD" e.g. "02 09" means February 9, "03 01" means March 1
+- The Date column shows two 2-digit numbers "MM DD" — ALWAYS month first, then day.
+  "02 09" = 9 February, "05 25" = 25 May, "06 01" = 1 June.
+- "05 25" must become "25/05/YYYY". NEVER collapse it to "05/05" or swap the numbers.
+- EVERY transaction row has its own value in the Date column (immediately left of the
+  Balance column). Use ONLY that value. NEVER take a date from the description text —
+  e.g. for "INTEREST ON OVERDRAFT UP TO 05 24" the "05 24" is part of the DESCRIPTION;
+  the transaction's real date is whatever its Date column says. Same for descriptions
+  like "FOR 05/23 11.25%" — those are not dates.
+- Transactions are in strict chronological order. If a date you are about to output is
+  EARLIER than the previous transaction's date, you have misread the Date column —
+  re-read it before continuing.
 - Find the statement year from the header line "Statement from DD Month YYYY to DD Month YYYY"
 - Output format: DD/MM/YYYY e.g. "09/02/2024"
 - If a transaction date falls before the statement start date, it belongs to the next year
@@ -531,6 +647,73 @@ Each object must have exactly these keys:
 - "amount": number
 
 Return ONLY the JSON array, nothing else.""",
+
+"FNB Credit Card": """You are a bank statement parser reading a scanned image of an FNB Business Credit Card statement. Your ONLY output must be a valid JSON array. No explanation, no markdown, no code fences, no preamble, no postamble — just the raw JSON array starting with [ and ending with ].
+
+TASK: Extract every transaction from this FNB Business Credit Card statement image.
+
+PAGES TO IGNORE COMPLETELY:
+- The "Account Summary" page — summary figures only, no transactions.
+- The "Expense Summary" page — a grid of spend categories (Airlines, Hotels, Entertainment, Shops, Fuel, Interest, Fees, Total Expenses …) across ~13 monthly columns. Every number there is a historical total. Output NOTHING from this page.
+- Transaction pages are headed "Tran Date | Transaction Details | Credit Facility | Budget Facility".
+
+THE TRANSACTION TABLE HAS THESE COLUMNS IN ORDER (left to right):
+  Column 1: Tran Date        — always "DD Mon" e.g. "30 Jan"
+  Column 2: Merchant         — merchant / narrative text, at the far left of the details area
+  Column 3: Town/Reference   — merchant town or reference code, starting about HALFWAY across the details area at the same horizontal position on every row
+  Column 4: Credit Facility  — THE amount column
+  Column 5: Budget Facility  — usually 0.00, far right
+
+THE PRINTED HEADER IS MISLEADING: the statement prints ONE header, "Transaction Details", above BOTH Column 2 and Column 3. They are NOT one field — there is a wide whitespace gap between them and Column 3 starts at the same x-position on every row. You MUST split them.
+
+A row is a transaction ONLY if Column 1 holds a "DD Mon" date.
+
+Each object must have exactly these keys:
+- "date": string DD/MM/YYYY
+- "details": string — Column 2 ONLY, leading "#" stripped
+- "reference": string — Column 3 ONLY as printed, or "" if blank. REQUIRED on every object.
+- "amount": number
+
+SPLITTING COLUMN 2 FROM COLUMN 3 — WORKED EXAMPLES:
+  "29 Jan  Mozambique Haarties   Pretoria        1 030.00"
+      → {"date":"29/01/2025","details":"Mozambique Haarties","reference":"Pretoria","amount":-1030.00}
+  "30 Jan  1sa Trf               Vodsbz6j7 85M  25 000.00 Cr"
+      → {"date":"30/01/2025","details":"1sa Trf","reference":"Vodsbz6j7 85M","amount":25000.00}
+  "26 Feb  Interest                              4 615.57"
+      → {"date":"26/02/2025","details":"Interest","reference":"","amount":-4615.57}
+
+COMMON MISTAKE — DO NOT MAKE IT:
+- Never concatenate Column 3 onto "details". "Mozambique Haarties Pretoria" is WRONG.
+- Column 2 is often cut off mid-word so Column 3 looks like it continues the word (e.g. "#Int Pymt Fee-google *Yo" + "Utube Music"). It does not — they are still two separate columns.
+
+AMOUNT RULES — READ COLUMN 4 ONLY:
+- Thousands are separated by a SPACE on this statement: "1 030.00" is 1030.00, "35 000.00" is 35000.00. Strip all spaces and commas.
+- Followed by "Cr" (e.g. "25 000.00 Cr") → POSITIVE (money paid into the card).
+- No "Cr" suffix → NEGATIVE (purchase, fee or interest).
+- There is NO running-balance column on this statement — do not invent one, and never take the amount from Column 5 unless Column 4 is empty for that row.
+
+DATE RULES:
+- "DD Mon" with no year. Take the statement month/year from the "Statement Date" on the first page (e.g. "26 February 2025").
+- Month same as or earlier than the statement month → statement year. Month LATER than the statement month → PREVIOUS year (e.g. "28 Dec" on a 26 January 2025 statement → 28/12/2024).
+
+ROW ORDER:
+- Rows are NOT chronological — fee rows come first, then purchases, then a block of credits that restarts at the beginning of the period. Extract every row as printed; never skip one for being out of order.
+
+THE SUMMARY BLOCK IS NOT THE END:
+- "Total Transactions / Total Card Balance / Amount Due (Transferred) / Closing Balance / Total Outstanding Balance" appears mid-page on the last transaction page, with MORE transaction rows below it. Keep reading to the bottom.
+
+SKIP:
+- "Balance Brought Forward" lines, card-number/limit lines, the cardholder name as a standalone heading, "Items marked # are inclusive of VAT.", all the summary/total lines above, headers and footers.
+- The dated row whose details are the CARDHOLDER'S NAME and whose amount equals "Total Card Balance" — an internal transfer that would double-count the statement.
+
+KEEP:
+- "Payment - Thank You" — a real payment received. POSITIVE amount.
+
+BALANCE CHECK VALUES — this OVERRIDES the general wording that follows. Several similar numbers appear on this statement, so pick carefully:
+- "opening_balance": the "Balance Brought Forward" under **Credit Facility** on the Account Summary page (the FIRST page), POSITIVE. NOT the Budget Facility one (usually 0.00), and NOT the "Balance Brought Forward" figures at the top of the transaction pages (those are per-account splits of it).
+- "closing_balance": the "Total Outstanding Balance" under **Credit Facility**, POSITIVE. NOT "Closing Balance" (that is after next month's sweep), NOT "Total Card Balance", NOT the Budget Facility 0.00 beside it.
+
+Return ONLY the JSON array, nothing else.""",
 }
 
 # ─── BANK CONFIG ──────────────────────────────────────────────────────────────
@@ -539,6 +722,7 @@ BANK_COLORS = {
     "Capitec":                     "#007b5e",
     "Investec":                    "#003366",
     "FNB":                         "#cc0000",
+    "FNB Credit Card":             "#cc0000",
     "ABSA":                        "#cc0000",
     "Nedbank":                     "#007b3e",
     "Standard Bank":               "#0033a0",
@@ -549,11 +733,27 @@ BANK_COLORS = {
 # Discovery banks that support section-type selection in the confirmation panel
 DISCOVERY_BANKS = {"Discovery Invest"}
 
+# FNB supports a statement-type selection (Business Account vs Credit Card) in
+# the confirmation panel — same pattern as DISCOVERY_BANKS.
+FNB_BANKS = {"FNB"}
+
 # Banks that always produce digital text-layer PDFs — never route to vision mode
 FORCE_TEXT_MODE = {"Discovery Invest", "Discovery Invest - Payments"}
 
-# Banks whose output includes a Reference (Fund Name) column in the CSV
-BANKS_WITH_REFERENCE = {"Discovery Invest"}
+# Banks whose output includes a Reference column in the CSV
+# (Discovery Invest → Fund Name, FNB Credit Card → merchant town / reference code)
+BANKS_WITH_REFERENCE = {"Discovery Invest", "FNB Credit Card"}
+
+# Credit card statements report a LIABILITY, not a bank balance: a purchase
+# (negative amount) INCREASES the outstanding balance. The balance cross-check
+# therefore expects sum(amounts) == opening - closing, not closing - opening.
+CREDIT_CARD_BANKS = {"FNB Credit Card"}
+
+# Statement formats whose rows are deliberately NOT in chronological order
+# (FNB credit cards print fees, then purchases, then a credits block that
+# restarts at the beginning of the period) — the date-anomaly check would
+# flag dozens of perfectly good rows, so it is skipped for these.
+NON_CHRONOLOGICAL_BANKS = {"FNB Credit Card"}
 
 BANK_LIST = [
     "Capitec", "Investec", "FNB", "ABSA",
@@ -1137,7 +1337,7 @@ def build_rows(raw: list, bank: str) -> list:
     written to the CSV as its own Reference column when populated (e.g. Discovery
     Invest fund names), instead of being merged and truncated inside Details.
     Capitec fee amounts are split into separate Service Fee rows.
-    Rows keep a '_chunk' tag (which API batch produced them) for boundary dedup.
+    Rows keep a '_chunk' tag (which API batch produced them) for duplicate flagging.
     """
     result = []
     for r in raw:
@@ -1158,24 +1358,25 @@ def build_rows(raw: list, bank: str) -> list:
             result.append({'date': date, 'details': details, 'amount': amount, 'reference': reference, '_chunk': chunk})
     return result
 
-def deduplicate_rows(rows: list):
+def flag_cross_batch_duplicates(rows: list):
     """
-    Remove ONLY cross-batch duplicates: the same (date, details, amount, reference)
-    appearing in two different API page-batches is almost always one transaction
-    read twice at a batch boundary.
+    Flag (but KEEP) rows where the same (date, details, amount, reference) appears
+    in more than one API page-batch.
 
-    Identical rows WITHIN one batch are KEPT — they are real repeated transactions
-    (e.g. several identical Capitec Service Fee rows or Investec electronic debit
-    fees on the same day) and must not be dropped. The previous blanket dedup
-    silently deleted those.
+    Page-batches never share pages, so an identical row in two batches is usually
+    a REAL repeated transaction on a day that spans a batch boundary (e.g. a run of
+    identical R45 fee rows split across pages). The old behaviour deleted these
+    silently — on a real Standard Bank statement it removed 13 genuine rows,
+    partly because a misread date made distinct rows collide. Flagging lets the
+    balance check and the user decide instead.
 
-    Returns (rows, removed_count).
+    Returns (rows, flagged) — rows is unchanged; flagged are the later-batch
+    copies, shown in the UI for verification.
     """
     if not rows:
-        return rows, 0
+        return rows, []
     seen_chunks = {}   # key -> set of batch ids that produced it
-    result  = []
-    removed = 0
+    flagged = []
     for r in rows:
         key = (
             r.get("date", ""),
@@ -1186,11 +1387,43 @@ def deduplicate_rows(rows: list):
         chunk = r.get("_chunk", 0)
         chunks_seen = seen_chunks.setdefault(key, set())
         if chunks_seen and chunk not in chunks_seen:
-            removed += 1        # same row from a different batch → boundary duplicate
-            continue
+            flagged.append(r)   # same row also produced by a different batch
         chunks_seen.add(chunk)
-        result.append(r)
-    return result, removed
+    return rows, flagged
+
+def find_date_anomalies(rows: list):
+    """
+    Flag rows whose date steps BACKWARDS relative to the running maximum.
+    Statements list transactions chronologically, so a backwards jump almost
+    always means the date column was misread for a block of rows (e.g. Standard
+    Bank "05 25" extracted as "05/05"). A PDF holding two consecutive statements
+    legitimately resets once at the boundary — that shows up here too and is
+    quick to dismiss on sight.
+    """
+    anomalies = []
+    max_d = None
+    for r in rows:
+        try:
+            d = datetime.strptime(r.get('date', ''), "%d/%m/%Y")
+        except ValueError:
+            anomalies.append(r)   # unparseable date is itself suspect
+            continue
+        if max_d is not None and d < max_d:
+            anomalies.append(r)
+        else:
+            max_d = d
+    return anomalies
+
+def rows_to_table(rows: list) -> list:
+    """Rows → display dicts for st.dataframe; Reference column only when present."""
+    has_ref = any(r.get('reference') for r in rows)
+    table = []
+    for r in rows:
+        d = {'Date': r['date'], 'Details': r['details'], 'Amount': r['amount']}
+        if has_ref:
+            d['Reference'] = r.get('reference', '')
+        table.append(d)
+    return table
 
 def rows_to_csv_bytes(rows: list) -> bytes:
     """Write rows to CSV. A Reference column (e.g. Discovery Invest fund name) is
@@ -1395,6 +1628,12 @@ if selected_bank == "Discovery Invest":
         "(Units column stripped)  ·  Payment Summary: Date · Description · Net Payment "
         "(negative withdrawals). Select the section type in the confirmation panel."
     )
+if selected_bank == "FNB":
+    st.caption(
+        "**FNB** — Business Account: Date · Description · Amount  ·  Credit Card: Date · "
+        "Transaction Details · Amount · Reference (merchant town / reference code, kept out "
+        "of the description). Select the statement type in the confirmation panel."
+    )
 
 st.markdown("")
 
@@ -1497,13 +1736,42 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 vision_used = False
 
             # ── Post-process rows ─────────────────────────────────────────
-            rows              = build_rows(raw, effective_bank)
-            rows, dup_removed = deduplicate_rows(rows)
-            if dup_removed:
+            rows               = build_rows(raw, effective_bank)
+            rows, flagged_dups = flag_cross_batch_duplicates(rows)
+            if flagged_dups:
                 extract_warnings.append(
-                    f"{dup_removed} duplicate row{'s' if dup_removed != 1 else ''} removed "
-                    f"(same transaction read twice at a page-batch boundary)."
+                    f"{len(flagged_dups)} row{'s appear' if len(flagged_dups) != 1 else ' appears'} "
+                    f"identically in more than one page-batch — KEPT in the CSV (usually real "
+                    f"repeated transactions on a day spanning a page boundary). Review them below."
                 )
+            # Skipped for formats that legitimately print rows out of order —
+            # on an FNB credit card it would flag ~30 correct rows every time.
+            date_anomalies = (
+                [] if effective_bank in NON_CHRONOLOGICAL_BANKS
+                else find_date_anomalies(rows)
+            )
+            if date_anomalies:
+                extract_warnings.append(
+                    f"{len(date_anomalies)} row{'s have' if len(date_anomalies) != 1 else ' has'} "
+                    f"out-of-order dates — statements are chronological, so the date column was "
+                    f"probably misread for these rows. Verify them against the statement below."
+                )
+            # The CSV grows a Reference column only when rows actually carry one.
+            # If the model folds the reference into the description instead of
+            # emitting the key, the output silently loses a column and the
+            # descriptions come out merged — with nothing else to flag it, since
+            # the amounts still reconcile. Say so explicitly.
+            if effective_bank in BANKS_WITH_REFERENCE and rows and not any(
+                r.get('reference') for r in rows
+            ):
+                extract_warnings.append(
+                    f"No Reference column was produced — {effective_bank} statements should have "
+                    f"one, so the reference was probably merged into the description instead "
+                    f"(e.g. \"Mozambique Haarties Pretoria\" rather than \"Mozambique Haarties\" "
+                    f"+ \"Pretoria\"). Amounts are unaffected. Re-run the file; if it repeats, "
+                    f"the prompt needs adjusting."
+                )
+
             fee_rows = sum(1 for r in rows if r['details'] == 'Service Fee')
             txn_rows = len(rows) - fee_rows
 
@@ -1512,8 +1780,12 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
             b_open  = balance_info.get('opening')
             b_close = balance_info.get('closing')
             if b_open is not None and b_close is not None:
+                is_card  = effective_bank in CREDIT_CARD_BANKS
                 txn_sum  = round(sum(r['amount'] for r in rows), 2)
-                expected = round(b_close - b_open, 2)
+                # Bank account: closing = opening + sum(amounts).
+                # Credit card: the balance is money OWED, so a purchase
+                # (negative amount) pushes it UP — closing = opening - sum.
+                expected = round(b_open - b_close, 2) if is_card else round(b_close - b_open, 2)
                 diff     = round(txn_sum - expected, 2)
                 balance_check = {
                     'status':   'ok' if abs(diff) <= 0.05 else 'fail',
@@ -1524,9 +1796,13 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                     'diff':     diff,
                 }
                 if balance_check['status'] == 'fail':
+                    move_label = (
+                        "the statement balance owed moves by" if is_card
+                        else "the statement balances move by"
+                    )
                     extract_warnings.append(
-                        f"Balance check FAILED: extracted transactions sum to R{txn_sum:,.2f}, but the "
-                        f"statement balances move by R{expected:,.2f} (opening R{b_open:,.2f} → closing "
+                        f"Balance check FAILED: extracted transactions sum to R{txn_sum:,.2f}, but "
+                        f"{move_label} R{expected:,.2f} (opening R{b_open:,.2f} → closing "
                         f"R{b_close:,.2f}). Difference of R{diff:,.2f} — rows may be missing or duplicated. "
                         f"Verify the CSV before importing."
                     )
@@ -1561,6 +1837,8 @@ if st.session_state.confirmed_bank and st.session_state.confirmed_files:
                 'section_label':  section_label,
                 'csv_filename':   csv_filename,
                 'rows':           rows,
+                'flagged_dups':   flagged_dups,
+                'date_anomalies': date_anomalies,
                 'txn_count':      txn_rows,
                 'fee_count':      fee_rows,
                 'status':         'done',
@@ -1788,6 +2066,50 @@ elif uploaded_files:
                 )
             st.markdown("")
 
+        # ── Statement type selector — FNB only ────────────────────────────
+        if selected_bank in FNB_BANKS:
+            st.markdown("**Which FNB statement type are you processing?**")
+            # Pre-select Credit Card when the filenames say so — the bank
+            # dropdown itself can't distinguish the two FNB formats.
+            fnb_default = 1 if any(
+                "credit card" in fm["name"].lower() or "creditcard" in fm["name"].lower()
+                for fm in file_meta
+            ) else 0
+            fnb_choice = st.radio(
+                "Statement type",
+                options=["Business Account", "Credit Card"],
+                index=fnb_default,
+                horizontal=True,
+                key="fnb_type_radio",
+                label_visibility="collapsed",
+                help=(
+                    "Business Account → Date · Description · Amount · Balance  |  "
+                    "Credit Card → Tran Date · Transaction Details · Town/Reference · Credit Facility"
+                )
+            )
+            if fnb_choice == "Credit Card":
+                # No section_label — the bank name already carries the format,
+                # so the CSV is FNB_Credit_Card_30Jan2025_to_26Feb2025.csv
+                effective_bank = "FNB Credit Card"
+                st.caption(
+                    "Purchases, fees and interest are saved as **negative** amounts; "
+                    "payments and transfers into the card (\"Cr\") as **positive**. "
+                    "The town / reference column is saved in the **Reference** column, "
+                    "not merged into the description. Reconciled against "
+                    "**Total Outstanding Balance**."
+                )
+            # The radio remembers its last value across uploads, so warn when it
+            # disagrees with the filenames — the two FNB prompts are very
+            # different and the wrong one produces bad rows at full token cost.
+            fnb_looks_like_card = fnb_default == 1
+            if fnb_looks_like_card and fnb_choice == "Business Account":
+                st.warning(
+                    "The filename says **credit card** but **Business Account** is selected. "
+                    "The Business Account prompt expects a Balance column this statement does "
+                    "not have — switch to Credit Card unless you know otherwise."
+                )
+            st.markdown("")
+
 
         max_pages = max(fm['pages'] for fm in file_meta)
 
@@ -1971,12 +2293,49 @@ with tab_results:
                         )
                     bc = f.get('balance_check') or {}
                     if bc.get('status') == 'ok':
-                        st.caption(
-                            f"✓ Balance check passed — opening R{bc['opening']:,.2f} "
-                            f"+ transactions R{bc['txn_sum']:,.2f} = closing R{bc['closing']:,.2f}"
-                        )
+                        # Credit cards run the other way: the balance is money
+                        # owed, so purchases (negative) push the closing figure up.
+                        if f.get('effective_bank') in CREDIT_CARD_BANKS:
+                            st.caption(
+                                f"✓ Balance check passed — opening owed R{bc['opening']:,.2f} "
+                                f"− transactions R{bc['txn_sum']:,.2f} = closing owed R{bc['closing']:,.2f}"
+                            )
+                        else:
+                            st.caption(
+                                f"✓ Balance check passed — opening R{bc['opening']:,.2f} "
+                                f"+ transactions R{bc['txn_sum']:,.2f} = closing R{bc['closing']:,.2f}"
+                            )
                     for w in f.get('warnings', []):
                         st.warning(f"⚠ {w}")
+                    flagged = f.get('flagged_dups') or []
+                    if flagged:
+                        with st.expander(
+                            f"View {len(flagged)} possible duplicate row"
+                            f"{'s' if len(flagged) != 1 else ''} (kept in the CSV)"
+                        ):
+                            st.caption(
+                                "Each of these rows also appears identically in a different "
+                                "page-batch. They are KEPT in the CSV because repeated same-day "
+                                "transactions (e.g. several identical fees) are usually real. "
+                                "Verify against the statement and delete from the CSV manually "
+                                "if one turns out to be a true duplicate."
+                            )
+                            st.dataframe(rows_to_table(flagged), use_container_width=True)
+                    anomalies = f.get('date_anomalies') or []
+                    if anomalies:
+                        with st.expander(
+                            f"⚠ View {len(anomalies)} row"
+                            f"{'s' if len(anomalies) != 1 else ''} with out-of-order dates"
+                        ):
+                            st.caption(
+                                "Statements list transactions chronologically — these rows step "
+                                "backwards in time, which usually means the date column was "
+                                "misread (e.g. Standard Bank '05 25' extracted as '05/05'). "
+                                "Check each against the statement and correct the CSV before "
+                                "importing. A PDF containing two statements resets once at the "
+                                "boundary — that single jump is expected."
+                            )
+                            st.dataframe(rows_to_table(anomalies), use_container_width=True)
                 else:
                     st.error(f"**{f['name']}** [{bank_label}] — {f.get('error', 'Unknown error')}")
             with col_b:

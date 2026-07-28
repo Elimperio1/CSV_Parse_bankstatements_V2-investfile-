@@ -13,7 +13,8 @@ Powered by **Claude AI (Anthropic)** via the Anthropic API.
 |---|---|
 | Capitec | Fee rows split into separate Service Fee lines |
 | Investec | Main transaction table only; summary tables ignored |
-| FNB | Text PDF and scanned (vision) modes |
+| FNB | Text PDF and scanned (vision) modes. Statement type (Business Account / Credit Card) is chosen in the confirmation panel |
+| FNB Credit Card | Business credit card. Merchant town/reference kept in its own Reference column; reconciled against **Total Outstanding Balance** (see Credit Cards below) |
 | ABSA | Per-page repeat summary box automatically excluded |
 | Nedbank | Debit/Credit column sign handling |
 | Standard Bank | MM DD date format normalised automatically |
@@ -137,3 +138,29 @@ Exchange rate used in-app: R16.59/$ (Dec 2025–Feb 2026 average). Update `USD_Z
 4. Add a colour to `BANK_COLORS`.
 5. If the bank output needs a Reference column, add it to `BANKS_WITH_REFERENCE`.
 6. Test against a real statement before deploying.
+
+A **sub-format** of a bank already in the list (e.g. FNB Credit Card) is not added to
+`BANK_LIST`. Instead add the prompt under a compound key, then switch to it with a radio in
+the confirmation panel that sets `effective_bank` — see `FNB_BANKS` / `DISCOVERY_BANKS`.
+
+---
+
+## Credit Cards
+
+A credit card balance is money **owed**, so it moves opposite to a bank balance: a purchase
+(negative amount) makes the closing figure go **up**. Banks listed in `CREDIT_CARD_BANKS` are
+therefore checked as `sum(amounts) == opening − closing` instead of `closing − opening`.
+
+FNB business credit cards also need two format quirks handled, both covered in the prompt:
+
+- **Rows are not chronological.** The statement prints international-payment fees first, then
+  purchases in date order, then a block of payment credits that restarts at the beginning of
+  the period. Banks in `NON_CHRONOLOGICAL_BANKS` skip the date-anomaly check, which would
+  otherwise flag dozens of correct rows.
+- **Two accounts in one statement.** A control account and the cardholder card. The dated row
+  whose description is the cardholder's name and whose amount equals `Total Card Balance` is
+  an internal transfer between them — extracting it would double-count the whole statement, so
+  the prompt drops it. `Payment - Thank You` is a real payment and is kept.
+
+Worked example (`CREDIT CARD 26 FEB 2025.pdf`, 139 rows):
+`Balance Brought Forward 243 060.49` − `6 593.70` = `Total Outstanding Balance 249 654.19`.
