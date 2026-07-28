@@ -71,6 +71,9 @@ st.markdown("""
         border-radius: 4px !important;
         width: 100% !important;
     }
+    .stDownloadButton button p,
+    .stDownloadButton button span,
+    .stDownloadButton button div { color: white !important; }
     .stDownloadButton > button:hover {
         background-color: #155724 !important;
     }
