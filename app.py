@@ -1084,8 +1084,14 @@ DOCUMENT STRUCTURE — CRITICAL:
 BALANCE CHECK — REQUIRED FINAL ELEMENT:
 After the LAST transaction object, append exactly ONE extra object to the array:
 {"balance_check": true, "opening_balance": <number or null>, "closing_balance": <number or null>}
-- opening_balance: the opening / brought-forward balance shown on the FIRST statement page of this document (signed number, negative if overdrawn; null if no opening balance is visible)
-- closing_balance: the closing / carried-forward balance shown on the LAST statement page of this document (signed number; null if not visible)
+- opening_balance: the opening / brought-forward balance shown on the FIRST statement page of this document (signed number, negative if overdrawn)
+- closing_balance: the closing / carried-forward balance shown on the LAST statement page of this document (signed number)
+- RUNNING-BALANCE FALLBACK: some statement formats (e.g. Standard Bank "Transaction History Statement") print NO labelled opening or closing balance, but DO print a running balance column on every transaction row (e.g. "Balance (R)"). In that case derive the values:
+  · closing_balance = the running balance printed on the LAST transaction row of the document.
+  · opening_balance = the running balance printed on the FIRST transaction row MINUS that row's signed transaction amount (the same amount you output for that row). Example: first row is a credit of 4755.00 with running balance 12199.21 → opening_balance = 12199.21 - 4755.00 = 7444.21.
+  · A separate bank-fees column is NOT part of this arithmetic — the running balance moves by the transaction amount only.
+- NEVER use an "Available balance" or "Current balance" figure from the statement header as either value — that is the balance at the moment the statement was GENERATED (it can include holds and later activity), not the period's opening or closing balance.
+- If the statement has no labelled balances AND no running-balance column, use null.
 - NEVER output balance lines as transaction rows — they belong only in this final object.
 Return ONLY the JSON array, nothing else."""
 

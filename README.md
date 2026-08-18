@@ -118,7 +118,7 @@ streamlit run app.py
 - **Multi-bank support** — one dropdown, one workflow
 - **Blank-page tolerant** — truly blank pages (e.g. between two statements joined in one PDF) are detected, stripped, and extraction continues to the last page
 - **Multi-statement PDFs** — several statements concatenated in one file are all extracted
-- **Balance cross-check** — opening balance + sum of extracted transactions is verified against the closing balance; a mismatch shows a warning with the difference
+- **Balance cross-check** — opening balance + sum of extracted transactions is verified against the closing balance; a mismatch shows a warning with the difference. Statements with no labelled opening/closing but a running-balance column (e.g. Standard Bank Transaction History) derive both from the running balance; header "Available balance" figures are never used. Statements with neither skip the check
 - **Truncation-safe** — responses cut off at the output token limit are detected and the affected pages are automatically re-sent in smaller batches
 - **Scanned PDF detection** — automatically switches to vision (image) mode if no text layer found; vision requests are batched 4 pages at a time
 - **Large PDF chunking** — statements over 8 pages are split and merged automatically, with per-batch row counts shown in the results
