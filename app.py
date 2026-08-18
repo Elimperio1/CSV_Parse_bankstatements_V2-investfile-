@@ -1425,12 +1425,19 @@ def rows_to_table(rows: list) -> list:
         table.append(d)
     return table
 
-def rows_to_csv_bytes(rows: list) -> bytes:
+def rows_to_csv_bytes(rows: list, meta_rows=None) -> bytes:
     """Write rows to CSV. A Reference column (e.g. Discovery Invest fund name) is
     included only when at least one row carries a reference value, so standard
-    banks keep their 3-column Pastel format."""
+    banks keep their 3-column Pastel format.
+
+    ``meta_rows`` (optional) is a list of writeup-v1 ``#META`` rows prepended
+    before the header. When it is None/empty the output is byte-identical to the
+    Pastel-ready CSV — that is the regression bar for the default (toggle off)."""
     output = io.StringIO()
     writer = csv.writer(output)
+    if meta_rows:
+        for m in meta_rows:
+            writer.writerow(m)
     if any(r.get('reference') for r in rows):
         writer.writerow(['Date', 'Description', 'Amount', 'Reference'])
         for row in rows:
@@ -1440,6 +1447,73 @@ def rows_to_csv_bytes(rows: list) -> bytes:
         for row in rows:
             writer.writerow([row['date'], row['details'], row['amount']])
     return output.getvalue().encode('utf-8')
+
+# ── writeup-v1 metadata (optional #META header for the statement-writeup tool) ──
+# Contract lives in statement-writeup's PRD.md §5. Critical invariant: only emit
+# balances that belong exactly to the rows in the file being written. A wrong
+# balance silently poisons downstream reconciliation; an omitted one merely falls
+# back to manual entry there — so when anything is uncertain, skip, never guess.
+
+def _fmt_meta_num(x) -> str:
+    """Plain decimal, point separator, no thousands separators, no symbol."""
+    return f"{float(x):.2f}"
+
+def _period_bounds(rows: list):
+    """Return (min_date, max_date) as DD/MM/YYYY strings taken verbatim from the
+    rows (same format as the data rows), or (None, None) if no date parses."""
+    parsed = []
+    for r in rows:
+        d = r.get('date', '')
+        if d:
+            try:
+                p = d.split('/')
+                parsed.append((datetime(int(p[2]), int(p[1]), int(p[0])), d))
+            except Exception:
+                pass
+    if not parsed:
+        return None, None
+    return (min(parsed, key=lambda t: t[0])[1],
+            max(parsed, key=lambda t: t[0])[1])
+
+def _combined_effective_bank(files: list):
+    """The shared effective bank across a multi-file row set, or None if the
+    files span more than one bank (in which case bank/account_type are omitted
+    rather than invented)."""
+    ebs = {f.get('effective_bank') for f in files if f.get('effective_bank')}
+    return next(iter(ebs)) if len(ebs) == 1 else None
+
+def build_writeup_meta_rows(effective_bank, rows, balance_check):
+    """Build writeup-v1 #META rows for the given row set.
+
+    Balances (opening/closing/difference) and a definitive passed/failed are
+    emitted ONLY when ``balance_check`` is the app's own ok/fail cross-check for
+    exactly these rows (i.e. a single whole statement). For every other row set —
+    a month slice, or several statements combined — pass balance_check=None so
+    the block records ``balance_check,skipped`` and omits the balance lines."""
+    meta = [['#META', 'format', 'writeup-v1']]
+    if effective_bank:
+        meta.append(['#META', 'bank', effective_bank])
+        acct = 'credit_card' if effective_bank in CREDIT_CARD_BANKS else 'bank'
+        meta.append(['#META', 'account_type', acct])
+    p_start, p_end = _period_bounds(rows)
+    if p_start and p_end:
+        meta.append(['#META', 'period_start', p_start])
+        meta.append(['#META', 'period_end', p_end])
+    bc = balance_check or {}
+    status = bc.get('status')
+    if status in ('ok', 'fail') and bc.get('opening') is not None and bc.get('closing') is not None:
+        # Credit-card balances are emitted as printed (positive = owed); the
+        # downstream tool applies the inverted identity from account_type itself.
+        meta.append(['#META', 'opening_balance', _fmt_meta_num(bc['opening'])])
+        meta.append(['#META', 'closing_balance', _fmt_meta_num(bc['closing'])])
+        if status == 'ok':
+            meta.append(['#META', 'balance_check', 'passed'])
+        else:
+            meta.append(['#META', 'balance_check', 'failed'])
+            meta.append(['#META', 'balance_difference', _fmt_meta_num(bc.get('diff', 0.0))])
+    else:
+        meta.append(['#META', 'balance_check', 'skipped'])
+    return meta
 
 def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
     """
@@ -2340,7 +2414,16 @@ with tab_results:
                     st.error(f"**{f['name']}** [{bank_label}] — {f.get('error', 'Unknown error')}")
             with col_b:
                 if f['status'] == 'done':
-                    csv_bytes = rows_to_csv_bytes(f['rows'])
+                    # This button renders above the toggle; read the shared key so a
+                    # single checkbox governs every download path (value propagates on
+                    # the rerun Streamlit fires when the toggle changes).
+                    per_file_meta = (
+                        build_writeup_meta_rows(
+                            f.get('effective_bank'), f['rows'], f.get('balance_check')
+                        )
+                        if st.session_state.get('include_writeup_meta', False) else None
+                    )
+                    csv_bytes = rows_to_csv_bytes(f['rows'], per_file_meta)
                     dl_fname  = f.get('csv_filename') or f['name'].replace('.pdf', '.csv')
                     st.download_button(
                         "Download CSV",
@@ -2372,9 +2455,35 @@ with tab_results:
             # ── Download section ───────────────────────────────────────────
             st.markdown("---")
             st.markdown("#### Download")
+            include_meta = st.checkbox(
+                "Include write-up metadata (#META header — for the write-up tool, not for Pastel import)",
+                value=False,
+                key="include_writeup_meta",
+                help="Prepends #META lines carrying the statement's disclosed opening/closing "
+                     "balance, period and account type for the statement-writeup tool. Applies "
+                     "to every download on this page and in History. Leave OFF for Pastel imports "
+                     "— off is byte-identical to the standard CSV.",
+            )
+            done_files = [x for x in st.session_state.processed_files if x['status'] == 'done']
             col1, col2 = st.columns(2)
             with col1:
-                all_csv = rows_to_csv_bytes(st.session_state.all_rows)
+                # Whole combined set: only a single processed file lets us attribute
+                # exact opening/closing to these rows; multiple files → skipped.
+                all_meta = None
+                if include_meta:
+                    if len(done_files) == 1:
+                        all_meta = build_writeup_meta_rows(
+                            done_files[0].get('effective_bank'),
+                            st.session_state.all_rows,
+                            done_files[0].get('balance_check'),
+                        )
+                    else:
+                        all_meta = build_writeup_meta_rows(
+                            _combined_effective_bank(done_files),
+                            st.session_state.all_rows,
+                            None,
+                        )
+                all_csv = rows_to_csv_bytes(st.session_state.all_rows, all_meta)
                 st.download_button(
                     "Download All Combined",
                     data=all_csv,
@@ -2392,7 +2501,16 @@ with tab_results:
                     "Download specific month:", ['All months'] + month_options
                 )
                 if selected_month != 'All months':
-                    month_csv = rows_to_csv_bytes(by_month[selected_month])
+                    # A month slice never has attributable boundary balances → skipped.
+                    month_meta = (
+                        build_writeup_meta_rows(
+                            _combined_effective_bank(done_files),
+                            by_month[selected_month],
+                            None,
+                        )
+                        if include_meta else None
+                    )
+                    month_csv = rows_to_csv_bytes(by_month[selected_month], month_meta)
                     st.download_button(
                         f"Download {selected_month}",
                         data=month_csv,
@@ -2470,7 +2588,14 @@ with tab_history:
                         f"{f['txn_count']} transactions{fee_info}{cost_tag}"
                     )
                 with col_b:
-                    hist_csv  = rows_to_csv_bytes(f['rows'])
+                    # Same single toggle as the Results tab governs History re-downloads.
+                    hist_meta = (
+                        build_writeup_meta_rows(
+                            f.get('effective_bank'), f['rows'], f.get('balance_check')
+                        )
+                        if st.session_state.get('include_writeup_meta', False) else None
+                    )
+                    hist_csv  = rows_to_csv_bytes(f['rows'], hist_meta)
                     hist_fname = f.get('csv_filename') or f['name'].replace('.pdf', '.csv')
                     st.download_button(
                         "Download CSV",
@@ -2484,7 +2609,14 @@ with tab_history:
                 all_session_rows = []
                 for f in entry['files']:
                     all_session_rows.extend(f['rows'])
-                session_csv = rows_to_csv_bytes(all_session_rows)
+                # Several statements combined → balances not attributable → skipped.
+                session_meta = (
+                    build_writeup_meta_rows(
+                        _combined_effective_bank(entry['files']), all_session_rows, None
+                    )
+                    if st.session_state.get('include_writeup_meta', False) else None
+                )
+                session_csv = rows_to_csv_bytes(all_session_rows, session_meta)
                 ts_safe = (
                     entry['timestamp']
                     .replace(', ', '_').replace(' ', '_').replace(':', '')

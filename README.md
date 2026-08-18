@@ -32,6 +32,38 @@ Powered by **Claude AI (Anthropic)** via the Anthropic API.
 - Amount: signed float — negative = money out, positive = money in
 - Pastel-ready on import
 
+### Write-up metadata (`#META` header)
+
+Optional, controlled by the **"Include write-up metadata"** checkbox in the Download
+area. **Default OFF** — Pastel users leave it off, and with it off the CSV is byte-for-byte
+the standard output above. It applies to every download path (per-file, All Combined,
+month-by-month, and History re-downloads).
+
+When on, a `writeup-v1` block is prepended before the header row, for the separate
+**statement-writeup** tool (contract mirrored in that repo's `PRD.md` §5):
+
+```
+#META,format,writeup-v1
+#META,bank,FNB Credit Card
+#META,account_type,credit_card
+#META,period_start,01/02/2025
+#META,period_end,26/02/2025
+#META,opening_balance,243060.49
+#META,closing_balance,249654.19
+#META,balance_check,passed
+Date,Description,Amount
+...
+```
+
+- `account_type` is `credit_card` for banks in `CREDIT_CARD_BANKS`, else `bank`. Credit-card
+  balances are emitted **as printed** (positive = owed); the write-up tool applies the
+  inverted `opening − closing` identity itself.
+- `period_start`/`period_end` are the min/max transaction date in that file's rows.
+- `balance_check` is `passed`/`failed` **only** for a whole single statement, where the app's
+  own cross-check covers exactly those rows; a `failed` block adds a `balance_difference` line.
+  Combined and month-sliced downloads emit `balance_check,skipped` and omit the balance lines —
+  balances are never guessed for a row set the app can't reconcile exactly.
+
 ---
 
 ## Setup
