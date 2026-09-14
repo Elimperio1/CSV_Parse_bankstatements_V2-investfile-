@@ -64,6 +64,48 @@ Date,Description,Amount
   Combined and month-sliced downloads emit `balance_check,skipped` and omit the balance lines —
   balances are never guessed for a row set the app can't reconcile exactly.
 
+### Continue with Statement Writeup (the one-click bridge)
+
+A **"Continue with Statement Writeup →"** button sits under the Download area and on each
+History session. It opens the write-up tool with this session's statement CSVs already
+loaded — same bytes the download buttons produce, so it replaces download-then-upload
+without changing the contract above.
+
+The CSVs travel **inside the link**, in the URL fragment:
+
+```
+https://statement-writeup.vercel.app/#writeup=<tag><base64url>
+```
+
+- `<tag>` is one character: `1` = raw UTF-8 JSON, `2` = gzipped. The app gzips only when it
+  actually shrinks the payload, so small handoffs never depend on the browser's
+  `DecompressionStream`.
+- Decoded: `{"v":1,"source":"sa-bank-statement-to-csv","files":[{"name":"…","csv":"…"}]}`.
+- **Nothing is uploaded.** Browsers never transmit a fragment to a server, so there is no
+  endpoint, no token, no stored copy — this app keeps its no-server-side-storage rule (see
+  POPIA notes below). The write-up tool clears the fragment from the address bar as soon as
+  it has read it.
+- Target is overridable with a `WRITEUP_APP_URL` secret (for pointing a preview deploy at a
+  preview write-up URL).
+
+**Two rulings that look like bugs if you meet them cold** — both are in `app.py` beside
+`build_writeup_handoff_payload`:
+
+1. **The bridge always emits `#META`, ignoring the checkbox.** That checkbox exists only so
+   Pastel downloads stay byte-identical to the standard CSV; the write-up tool always wants
+   the metadata, and gating the bridge on it would send balance-less files that fail the
+   reconciliation gate downstream for no reason.
+2. **It sends the per-file CSVs, never the combined one.** Only a whole single statement has
+   attributable boundary balances, and the write-up tool expects one file per statement.
+
+Past `HANDOFF_MAX_URL_CHARS` (250,000) the button is replaced by a notice telling the user to
+download and upload by hand, rather than rendering a link too long to navigate. For scale:
+3,600 rows across 3 statements measures ~47,000 characters.
+
+**Deploy order matters.** The write-up tool must be able to read the fragment *before* this
+button ships — otherwise clicking it lands on an app that ignores the payload, which is a
+silent no-op with no error anywhere.
+
 ---
 
 ## Setup

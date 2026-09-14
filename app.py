@@ -2,7 +2,7 @@ import streamlit as st
 import anthropic
 import base64
 import hashlib
-import json, csv, io, re, time
+import json, csv, io, re, time, gzip
 from datetime import datetime
 from auth import require_login, show_sidebar_user, log_usage
 
@@ -246,6 +246,17 @@ COST_USD_PER_M_INPUT  = 3.00   # $ per million input tokens
 COST_USD_PER_M_OUTPUT = 15.00  # $ per million output tokens
 # USD/ZAR 3-month average Dec 2025 – Feb 2026
 USD_ZAR_RATE = 16.59
+
+# ─── STATEMENT-WRITEUP BRIDGE ────────────────────────────────────────────────
+# Target for the "Continue with Statement Writeup" button. Overridable via
+# secrets so a preview deploy can be pointed at a preview writeup URL.
+WRITEUP_APP_URL = st.secrets.get(
+    "WRITEUP_APP_URL", "https://statement-writeup.vercel.app"
+)
+# Ceiling on the generated URL. Browsers cope with far more, but past this we
+# refuse to render the button and tell the user to download instead — a link
+# too long to navigate would otherwise fail with no visible reason.
+HANDOFF_MAX_URL_CHARS = 250_000
 
 def calculate_cost(input_tokens: int, output_tokens: int):
     """Return (cost_usd, cost_zar) for a given token usage."""
@@ -1521,6 +1532,118 @@ def build_writeup_meta_rows(effective_bank, rows, balance_check):
         meta.append(['#META', 'balance_check', 'skipped'])
     return meta
 
+# ── "Continue with Statement Writeup" handoff ─────────────────────────────────
+# Carriage for the one-click bridge to the statement-writeup tool. The CSVs ride
+# in the URL *fragment*, which browsers never transmit to any server: nothing is
+# stored anywhere, no endpoint receives the data, and this app keeps its standing
+# no-server-side-storage rule. Contract mirrored in statement-writeup's PRD §14.
+#
+#   URL:     <WRITEUP_APP_URL>/#writeup=<tag><base64url>
+#   tag:     '1' = raw UTF-8 JSON, '2' = gzipped. We gzip only when it actually
+#            shrinks the payload, so a small single-statement handoff never
+#            depends on the browser's DecompressionStream API.
+#   decoded: {"v":1,"source":"sa-bank-statement-to-csv",
+#             "files":[{"name":"...","csv":"..."}]}
+#
+# TWO RULINGS, both of which read like bugs to someone seeing this cold:
+#  1. This ALWAYS emits #META, regardless of the `include_writeup_meta` checkbox.
+#     That checkbox exists only so Pastel downloads stay byte-identical to the
+#     standard CSV. The write-up tool always wants the metadata, and gating the
+#     bridge on it would ship balance-less files that fail the reconciliation
+#     gate downstream for no reason.
+#  2. It sends the PER-FILE CSVs, never the combined one. Only a whole single
+#     statement has attributable boundary balances — combined and month-sliced
+#     sets emit `balance_check,skipped` by design (see build_writeup_meta_rows)
+#     — and the write-up tool expects one file per statement (its PRD §5).
+
+def build_writeup_handoff_payload(done_files: list) -> dict:
+    """Build the decoded handoff payload for a list of completed files.
+
+    Each file is rendered with exactly the bytes its own Download CSV button
+    would produce with the metadata toggle on — same two helpers, no second code
+    path — so what crosses the bridge is what staff would have uploaded by hand.
+    """
+    files = []
+    for f in done_files:
+        if f.get('status') != 'done':
+            continue
+        meta = build_writeup_meta_rows(
+            f.get('effective_bank'), f['rows'], f.get('balance_check')
+        )
+        csv_text = rows_to_csv_bytes(f['rows'], meta).decode('utf-8')
+        name = f.get('csv_filename') or f['name'].replace('.pdf', '.csv')
+        files.append({'name': name, 'csv': csv_text})
+    return {'v': 1, 'source': 'sa-bank-statement-to-csv', 'files': files}
+
+
+def build_writeup_handoff_url(done_files: list):
+    """Return the statement-writeup URL carrying these files, or None.
+
+    None means either nothing to send or a payload over HANDOFF_MAX_URL_CHARS.
+    Both are caller-visible so the UI can say why, rather than render a link
+    that silently fails to navigate."""
+    payload = build_writeup_handoff_payload(done_files)
+    if not payload['files']:
+        return None
+    raw = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    # GzipFile rather than gzip.compress(mtime=…) so the timestamp is pinned on
+    # every Python version: gzip stamps mtime into the header, and an unpinned
+    # one makes the URL change on every Streamlit rerun for identical rows.
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=9, mtime=0) as gz:
+        gz.write(raw)
+    packed = buf.getvalue()
+    blob, tag = (packed, '2') if len(packed) < len(raw) else (raw, '1')
+    encoded = base64.urlsafe_b64encode(blob).decode('ascii')
+    url = f"{WRITEUP_APP_URL.rstrip('/')}/#writeup={tag}{encoded}"
+    return url if len(url) <= HANDOFF_MAX_URL_CHARS else None
+
+
+def count_failed_balance_checks(done_files: list) -> int:
+    """How many of these files failed the app's own opening/closing cross-check.
+
+    They are still sent — the write-up tool's own reconciliation gate surfaces
+    them — but the button says so, rather than passing a known-bad file across
+    quietly."""
+    return sum(
+        1 for f in done_files
+        if f.get('status') == 'done'
+        and (f.get('balance_check') or {}).get('status') == 'fail'
+    )
+
+
+def render_writeup_handoff(done_files: list):
+    """Render the "Continue with Statement Writeup" button for a set of files."""
+    sendable = [f for f in done_files if f.get('status') == 'done']
+    if not sendable:
+        return
+    url = build_writeup_handoff_url(sendable)
+    if url is None:
+        st.warning(
+            "This set is too large to hand over in one click. Download the CSVs "
+            "above and upload them to the write-up tool by hand."
+        )
+        return
+    st.link_button(
+        "Continue with Statement Writeup  →",
+        url,
+        use_container_width=True,
+    )
+    n_failed = count_failed_balance_checks(sendable)
+    note = (
+        f"Opens the write-up tool with {len(sendable)} statement CSV"
+        f"{'s' if len(sendable) != 1 else ''} already loaded, write-up metadata "
+        f"included. Nothing is uploaded to a server — the data travels inside "
+        f"the link itself."
+    )
+    if n_failed:
+        note += (
+            f" &nbsp;·&nbsp; ⚠ {n_failed} of them failed the balance check here "
+            f"and will arrive flagged."
+        )
+    st.caption(note, unsafe_allow_html=True)
+
+
 def build_csv_filename(bank: str, section_label: str, rows: list) -> str:
     """
     Build a descriptive CSV filename from bank name, section type, and the
@@ -2525,6 +2648,13 @@ with tab_results:
                         use_container_width=True
                     )
 
+            # ── Continue to the write-up tool ──────────────────────────────
+            # Deliberately outside the `include_meta` toggle: the bridge always
+            # carries #META (see build_writeup_handoff_payload, ruling 1), and
+            # always the per-file CSVs rather than the combined set (ruling 2).
+            st.markdown("")
+            render_writeup_handoff(done_files)
+
             # ── Preview table ──────────────────────────────────────────────
             st.markdown("---")
             st.markdown("#### Preview")
@@ -2634,4 +2764,9 @@ with tab_history:
                     mime='text/csv',
                     key=f"hist_all_{hi}"
                 )
+
+            # History entries deep-copy the whole file dicts (rows,
+            # effective_bank, balance_check), so the same helper works here —
+            # and it sends this session's per-file CSVs, not the combined one.
+            render_writeup_handoff(entry['files'])
             st.markdown("---")
