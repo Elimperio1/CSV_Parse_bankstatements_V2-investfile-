@@ -4,21 +4,6 @@ from google.oauth2.service_account import Credentials
 import json
 from datetime import datetime
 
-def get_bypass_codes() -> set:
-    """
-    Login bypass codes come from secrets instead of being hardcoded in source
-    (hardcoded codes in a public repo let anyone log in).
-    Add to .streamlit/secrets.toml / Streamlit Cloud secrets to enable:
-        LOGIN_BYPASS_CODES = "CODE1, CODE2"
-    Omit the secret entirely to disable bypass login.
-    """
-    try:
-        raw = st.secrets.get("LOGIN_BYPASS_CODES", "")
-        return {c.strip().upper() for c in str(raw).split(",") if c.strip()}
-    except Exception:
-        return set()
-
-
 @st.cache_resource(show_spinner=False)
 def get_gspread_client():
     scope = [
@@ -37,83 +22,6 @@ def get_gspread_client():
 
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.Client(auth=creds)
-
-
-def verify_user(email_input: str) -> dict:
-    raw = email_input.strip()
-
-    if raw.upper() in get_bypass_codes():
-        return {"email": "bypass@elimperio.co.za", "name": "Admin", "authorized": True}
-
-    target_email = raw.lower()
-
-    try:
-        client = get_gspread_client()
-        sheet   = client.open_by_key(st.secrets["GOOGLE_SHEET_ID"]).sheet1
-        records = sheet.get_all_records()
-
-        for row in records:
-            row_lower = {str(k).lower().strip(): str(v).strip() for k, v in row.items()}
-            if row_lower.get("email", "").lower() == target_email:
-                name = (
-                    row_lower.get("name")
-                    or row_lower.get("full name")
-                    or row_lower.get("fullname")
-                    or row_lower.get("display name")
-                    or "User"
-                )
-                return {"email": target_email, "name": name, "authorized": True}
-
-    except KeyError as e:
-        st.error(f"Auth config error — missing secret: {e}")
-    except Exception as e:
-        st.error(f"Auth Error: {e}")
-
-    return {"authorized": False}
-
-
-def require_login(logo_b64=None):
-    if st.session_state.get("logged_in"):
-        return
-
-    if logo_b64:
-        st.markdown(
-            f'<div style="text-align:center; padding-top: 40px;">'
-            f'<img src="data:image/png;base64,{logo_b64}" width="180"></div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<h2 style='text-align:center; margin-top:24px;'>Secure Access</h2>",
-                unsafe_allow_html=True)
-
-    _, col, _ = st.columns([1, 2, 1])
-    with col:
-        email = st.text_input("Email address:", key="_login_email")
-        login_clicked = st.button("Login", use_container_width=True, key="_login_btn")
-
-        if login_clicked:
-            if not email.strip():
-                st.warning("Please enter your email address.")
-            else:
-                res = verify_user(email)
-                if res["authorized"]:
-                    st.session_state.logged_in  = True
-                    st.session_state.user_email = res["email"]
-                    st.session_state.user_name  = res["name"]
-                    st.rerun()
-                else:
-                    st.error("Email not found. Please contact your administrator.")
-
-    st.stop()
-
-
-def show_sidebar_user():
-    name = st.session_state.get("user_name", "Unknown")
-    st.sidebar.markdown(f"**User:** {name}")
-    if st.sidebar.button("Logout", key="_logout_btn"):
-        for k in ("logged_in", "user_email", "user_name"):
-            st.session_state.pop(k, None)
-        st.rerun()
 
 
 def log_usage(email, bank, file_count, input_tokens, output_tokens, cost_usd=0.0, cost_zar=0.0):
