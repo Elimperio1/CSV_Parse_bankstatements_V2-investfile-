@@ -4,7 +4,8 @@ import base64
 import hashlib
 import json, csv, io, re, time, gzip
 from datetime import datetime
-from auth import require_login, show_sidebar_user, log_usage
+from app_link import require_app_link
+from auth import log_usage
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -15,7 +16,9 @@ st.set_page_config(
 )
 
 # ─── AUTH GATE — must be first thing after page config ────────────────────────
-require_login()
+# Only links minted by the practice-management app's Tools menu get in. This
+# replaced the email + Google Sheet login: the app's own accounts are the allowlist.
+require_app_link("csv-parse")
 
 # ─── CUSTOM CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
@@ -1711,8 +1714,6 @@ for k, v in defaults.items():
 with st.sidebar:
     st.markdown("### El Imperio")
     st.markdown("#### CSV Parser")
-    st.markdown("---")
-    show_sidebar_user()
     st.markdown("---")
 
     st.markdown("**Pastel tip**")

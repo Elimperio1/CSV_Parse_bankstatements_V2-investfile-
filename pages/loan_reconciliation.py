@@ -2,7 +2,11 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from openpyxl.styles import PatternFill
-from auth import require_login, show_sidebar_user
+from app_link import require_app_link
+
+# First thing the page does: only links minted by the practice-management app's
+# Tools menu get in. Everything below, even the header, is behind it.
+require_app_link("loan-reconciliation")
 
 # ─────────────────────────────────────────────
 #  EMBEDDED LOGO (base64)
@@ -104,7 +108,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-require_login()
 # ─────────────────────────────────────────────
 #  FORMAT CONFIGS
 # ─────────────────────────────────────────────
