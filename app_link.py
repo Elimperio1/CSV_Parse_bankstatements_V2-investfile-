@@ -64,9 +64,9 @@ def _check(token: str, slug: str) -> str:
             return "bad"
         if time.time() >= float(claims["exp"]):
             return "expired"
-        # The practice-management user id. It is the only identity the token
-        # carries (no email, by design), so usage logging records this instead.
-        st.session_state["user_email"] = f"app-user:{claims['sub']}"
+        # The usage sheet logs this. Links minted before the app added `name`
+        # (2026-10-07) carry only the user id, so that is the fallback.
+        st.session_state["user_email"] = claims.get("name") or f"app-user:{claims['sub']}"
         return "ok"
     except Exception:
         # Malformed, truncated, wrong shape, missing secret — all indistinguishable
