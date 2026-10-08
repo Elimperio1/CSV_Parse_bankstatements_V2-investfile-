@@ -234,19 +234,16 @@ div[data-testid="stAlert"]       { border-radius: 8px !important; }
 """, unsafe_allow_html=True)
 
 # ─── MODEL & COST CONSTANTS ──────────────────────────────────────────────────
-# Upgraded from claude-sonnet-4-6 → claude-sonnet-5 (better extraction accuracy,
-# same sticker price). Thinking is explicitly disabled on every call so the
-# model behaves like sonnet-4-6 did (deterministic, no thinking-token spend) —
-# on sonnet-5, omitting the thinking parameter would silently enable it.
-MODEL = "claude-sonnet-5"
+# Upgraded claude-sonnet-5 → claude-sonnet-5-5 (same price, same tokenizer).
+# Thinking is turned off on every call (deterministic extraction, no
+# thinking-token spend). Sonnet 5.5 rejects {"type": "disabled"} with a 400;
+# {"type": "between_tools"} is its thinking-off mode (valid at effort high or
+# below — the default is high). Omitting the parameter would enable thinking.
+MODEL = "claude-sonnet-5-5"
 
-# claude-sonnet-5 pricing (Anthropic published rates): $3/$15 per MTok standard.
-# An intro discount ($2/$10) applies until 31 Aug 2026 — the app uses standard
-# rates, so shown costs slightly overestimate until then. Note: sonnet-5 uses a
-# new tokenizer (~30% more tokens for the same text than sonnet-4-6), so token
-# counts per statement are higher even though the per-token price is unchanged.
-COST_USD_PER_M_INPUT  = 3.00   # $ per million input tokens
-COST_USD_PER_M_OUTPUT = 15.00  # $ per million output tokens
+# claude-sonnet-5-5 pricing (Anthropic published rates): $2/$10 per MTok.
+COST_USD_PER_M_INPUT  = 2.00   # $ per million input tokens
+COST_USD_PER_M_OUTPUT = 10.00  # $ per million output tokens
 # USD/ZAR 3-month average Dec 2025 – Feb 2026
 USD_ZAR_RATE = 16.59
 
@@ -971,7 +968,7 @@ def extract_transactions_vision(pdf_bytes, bank, stream_status=None):
                 with client.messages.stream(
                     model=MODEL,
                     max_tokens=MAX_OUT_TOKENS,
-                    thinking={"type": "disabled"},   # deterministic extraction, no thinking spend
+                    thinking={"type": "between_tools"},   # thinking off: deterministic extraction, no thinking spend
                     messages=[{"role": "user", "content": content_blocks}]
                 ) as stream:
                     for text in stream.text_stream:
@@ -1140,7 +1137,7 @@ def _call_claude_stream(pdf_b64: str, prompt: str, stream_status, chunk_label: s
             with client.messages.stream(
                 model=MODEL,
                 max_tokens=MAX_OUT_TOKENS,
-                thinking={"type": "disabled"},   # deterministic extraction, no thinking spend
+                thinking={"type": "between_tools"},   # thinking off: deterministic extraction, no thinking spend
                 messages=[{
                     "role": "user",
                     "content": [
