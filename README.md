@@ -190,7 +190,7 @@ This notice does not constitute legal advice. Consult a POPIA-qualified attorney
 
 ## API Cost Estimates
 
-Based on `claude-sonnet-5` pricing (standard $3/$15 per MTok; an intro discount of $2/$10 applies until 31 Aug 2026, so real costs are lower until then). Note: sonnet-5's tokenizer produces ~30% more tokens per statement than sonnet-4-6, so token counts are higher at the same per-token price.
+Based on `claude-sonnet-5-5` pricing ($2/$10 per MTok).
 
 | Statement type | Approx. cost (USD) |
 |---|---|
