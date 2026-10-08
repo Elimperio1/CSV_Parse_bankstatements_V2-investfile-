@@ -1,9 +1,8 @@
 """Gate a Streamlit tool behind a link minted by the practice-management app.
 
-This app serves TWO entries in the app's Tools menu, so the slug is an argument
-rather than a module constant: app.py calls `require_app_link("csv-parse")` and
-pages/loan_reconciliation.py calls `require_app_link("loan-reconciliation")`,
-each as the first thing the page does.
+The slug is an argument rather than a module constant: app.py calls
+`require_app_link("csv-parse")` as the first thing the page does. (Loan
+Reconciliation used to be a second page here; it moved to the Recon Toolbox.)
 
 Why this exists
 ---------------
@@ -96,7 +95,7 @@ def require_app_link(slug: str) -> None:
     """Stop the script unless this session arrived through the app.
 
     `slug` MUST match the entry in the app's src/lib/tools/menu.ts, because it is
-    checked against the token's `aud`. A verified session covers both pages.
+    checked against the token's `aud`. A verified session lasts SESSION_SECONDS.
     """
     if st.session_state.get("_app_link_until", 0) > time.time():
         return
