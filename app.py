@@ -539,6 +539,65 @@ SKIP THESE ENTIRELY:
 
 Return ONLY the JSON array, nothing else.""",
 
+"Standard Bank Report": """You are a bank statement parser. Your ONLY output must be a valid JSON array. No explanation, no markdown, no code fences, no preamble, no postamble. Just the raw JSON array starting with [ and ending with ].
+
+TASK: Extract every transaction from this Standard Bank transaction report. It may be a text PDF or a scanned image. The report ends with "** END OF REPORT **".
+
+THE TABLE HAS THESE COLUMNS IN ORDER (left to right):
+  Column 1: Page number - a small number ("1", "2") at the far left of each row. IGNORE IT. Never put it in details.
+  Column 2: Details     - the description, usually on TWO lines, e.g. "ELECTRONIC BANKING PAYMENT TO" then "40123 CITY MUNICIP BT10101:01"
+  Column 3: Service Fee - e.g. "0.00", "19.00". IGNORE ENTIRELY (see below).
+  Column 4: Debits      - money out, printed with a leading minus, e.g. "-1,250.00"
+  Column 5: Credits     - money in, e.g. "2,500.00". "0.00" on a debit row.
+  Column 6: Date        - 8 digits, YYYYMMDD, e.g. "20240223"
+  Column 7: Balance     - the running balance. Never the amount.
+The column headings may not be printed on every page. Identify the columns by position and by the patterns above.
+
+SERVICE FEE COLUMN (Column 3), CRITICAL:
+- A non-zero value here is a fee the bank accrues on that row and charges LATER as a row of its own (e.g. "SERVICE FEE ##"). It does NOT move the balance on the row where it is printed.
+- NEVER add it to the amount, NEVER subtract it, NEVER use it as the amount, NEVER create a row for it.
+- Worked example. Previous balance 50,000.00, then the row:
+    "ACCOUNT PAYMENT  19.00  -1,250.00  0.00  20240215  48,750.00"
+  amount = -1250.00, because 50,000.00 - 1,250.00 = 48,750.00. The 19.00 is ignored.
+
+AMOUNT RULES:
+- Debits (Column 4) non-zero: amount = that value, NEGATIVE. "-1,250.00" gives -1250.00.
+- Otherwise Credits (Column 5) non-zero: amount = that value, POSITIVE. "2,500.00" gives 2500.00.
+- Remove all commas.
+- Self-check every row: previous row's balance + amount = this row's balance. If it does not hold, you read the wrong column. Re-read the row.
+
+BANK CHARGE ROWS ARE REAL TRANSACTIONS. KEEP THEM:
+- Rows such as "OVERDRAFT SERVICE FEE ##", "MONTHLY MANAGEMENT FEE ##", "SERVICE FEE ##", with a second line such as "ACC 012345678", carry their amount in the Debits column and DO move the balance. Extract each one as a normal row.
+
+DATE RULES:
+- Column 6 is YYYYMMDD. "20240223" is 23 February 2024, output "23/02/2024". "20240210" is 10 February 2024, output "10/02/2024".
+- In a text layer the date can run straight into the number beside it with no space. An 8-digit run starting with "20" is the date:
+    "0.0020240223" is Credits "0.00" then Date "20240223"
+    "2024022348,750.00" is Date "20240223" then Balance "48,750.00"
+- NEVER take a date from the details text.
+- Rows are in date order. If a date is earlier than the previous row's date, re-read it.
+
+DETAILS RULES:
+- Join the two description lines with " - ", e.g. "ELECTRONIC BANKING PAYMENT TO - 40123 CITY MUNICIP BT10101:01".
+- Leave out the page number and the "##" marker. Strip leading and trailing whitespace.
+
+SKIP THESE ENTIRELY:
+- "BALANCE BROUGHT FORWARD" rows. They appear at the start AND again at the top of later pages, with Debits and Credits both 0.00 and the previous balance repeated.
+- Any row where Debits and Credits are both 0.00.
+- The report title block, column headings, "** END OF REPORT **" and page footers.
+
+Each object must have exactly these keys:
+- "date": string DD/MM/YYYY
+- "details": string
+- "amount": number
+
+BALANCE CHECK VALUES. This OVERRIDES the general wording that follows:
+- "opening_balance": the Balance on the FIRST "BALANCE BROUGHT FORWARD" row in this document. If there is none, the Balance on the first transaction row minus that row's amount.
+- "closing_balance": the Balance on the LAST transaction row in this document.
+- A balance printed with a minus sign (leading or trailing) is overdrawn: output it as a negative number.
+
+Return ONLY the JSON array, nothing else.""",
+
 "Discovery Invest": """You are a bank statement parser. Your ONLY output must be a valid JSON array. No explanation, no markdown, no code fences, no preamble, no postamble — just the raw JSON array starting with [ and ending with ].
 
 TASK: Extract every transaction from this Discovery Invest statement.
@@ -737,6 +796,7 @@ BANK_COLORS = {
     "ABSA":                        "#cc0000",
     "Nedbank":                     "#007b3e",
     "Standard Bank":               "#0033a0",
+    "Standard Bank Report":        "#0033a0",
     "Discovery Invest":            "#c8102e",
     "Discovery Invest - Payments": "#c8102e",
 }
@@ -747,6 +807,11 @@ DISCOVERY_BANKS = {"Discovery Invest"}
 # FNB supports a statement-type selection (Business Account vs Credit Card) in
 # the confirmation panel — same pattern as DISCOVERY_BANKS.
 FNB_BANKS = {"FNB"}
+
+# Standard Bank prints two layouts with different dates and signs: the statement
+# ("MM DD" dates, trailing-minus debits) and the transaction report (YYYYMMDD
+# dates, leading-minus debits, a Service Fee column that does not move the balance).
+STANDARD_BANK_BANKS = {"Standard Bank"}
 
 # Banks that always produce digital text-layer PDFs — never route to vision mode
 FORCE_TEXT_MODE = {"Discovery Invest", "Discovery Invest - Payments"}
@@ -790,6 +855,24 @@ def detect_bank_from_filename(filename: str):
             if kw in name_lower:
                 return bank
     return None
+
+# A YYYYMMDD date. The lookbehind also accepts one glued to a preceding "0.00",
+# which is how the report's text layer can print Credits and Date.
+_YYYYMMDD_RE = re.compile(
+    r'(?:(?<!\d)|(?<=\.\d\d))20\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)'
+)
+
+def looks_like_standard_bank_report(pdf_bytes: bytes) -> bool:
+    """True if the text layer reads like the Standard Bank transaction report.
+    A scanned PDF has no text layer, so it always returns False."""
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        text = "".join((page.get_text() or "") for page in doc)
+        doc.close()
+    except Exception:
+        return False
+    return "END OF REPORT" in text.upper() or len(_YYYYMMDD_RE.findall(text)) >= 5
 
 # ─── CORE UTILITIES ───────────────────────────────────────────────────────────
 
@@ -1345,6 +1428,13 @@ def normalise_date(date_str: str) -> str:
     if re.match(r'^\d{2}/\d{2}/\d{2}$', date_str):
         parts = date_str.split('/')
         return f"{parts[0]}/{parts[1]}/20{parts[2]}"
+    # Standard Bank transaction report prints YYYYMMDD; the model sometimes echoes it.
+    m = re.match(r'^(\d{4})-?(\d{2})-?(\d{2})$', date_str)
+    if m:
+        try:
+            return datetime(int(m[1]), int(m[2]), int(m[3])).strftime("%d/%m/%Y")
+        except ValueError:
+            pass
     return date_str
 
 def build_rows(raw: list, bank: str) -> list:
@@ -2308,6 +2398,37 @@ elif uploaded_files:
                     "The filename says **credit card** but **Business Account** is selected. "
                     "The Business Account prompt expects a Balance column this statement does "
                     "not have — switch to Credit Card unless you know otherwise."
+                )
+            st.markdown("")
+
+        # ── Layout selector, Standard Bank only ───────────────────────────
+        if selected_bank in STANDARD_BANK_BANKS:
+            st.markdown("**Which Standard Bank layout are you processing?**")
+            # Scanned PDFs have no text layer, so only a text PDF can preselect.
+            sb_default = 1 if any(
+                fm['bytes'] and looks_like_standard_bank_report(fm['bytes'])
+                for fm in file_meta
+            ) else 0
+            sb_choice = st.radio(
+                "Standard Bank layout",
+                options=["Statement", "Transaction report"],
+                index=sb_default,
+                horizontal=True,
+                key="sb_layout_radio",
+                label_visibility="collapsed",
+                help=(
+                    "Statement → dates printed as MM DD (02 09), debits end in a minus (750.00-)  |  "
+                    "Transaction report → dates printed as 20240223, debits start with a minus (-750.00), "
+                    "a Service Fee column, ends with ** END OF REPORT **"
+                )
+            )
+            if sb_choice == "Transaction report":
+                effective_bank = "Standard Bank Report"
+            # The radio keeps its last value across uploads.
+            if sb_default == 1 and sb_choice == "Statement":
+                st.warning(
+                    "This file reads like a **Transaction report** (20240223 dates, "
+                    "END OF REPORT) but **Statement** is selected. Switch to Transaction report."
                 )
             st.markdown("")
 

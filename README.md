@@ -17,7 +17,8 @@ Powered by **Claude AI (Anthropic)** via the Anthropic API.
 | FNB Credit Card | Business credit card. Merchant town/reference kept in its own Reference column; reconciled against **Total Outstanding Balance** (see Credit Cards below) |
 | ABSA | Per-page repeat summary box automatically excluded |
 | Nedbank | Debit/Credit column sign handling |
-| Standard Bank | MM DD date format normalised automatically |
+| Standard Bank | MM DD date format normalised automatically. Layout (Statement / Transaction report) is chosen in the confirmation panel |
+| Standard Bank Report | The transaction report: YYYYMMDD dates, leading-minus debits, ends with `** END OF REPORT **`. The Service Fee column is ignored; those fees post later as their own SERVICE FEE rows. Preselected when the text layer matches |
 | Discovery Invest | Extracts Date · Description · Amount · Fund Name; Units column stripped |
 
 ---
