@@ -1018,11 +1018,64 @@ def pdf_to_images_b64(pdf_bytes: bytes) -> list:
 
 # ─── EXTRACTION — VISION MODE ─────────────────────────────────────────────────
 
+def _call_claude_vision(chunk_bytes: bytes, prompt: str, stream_status, chunk_label: str = ""):
+    """Stream one batch of page images through Claude.
+    Returns (raw_text, input_tokens, output_tokens, stop_reason).
+    Automatically retries up to 3 times on rate limit (429) errors with a 65s wait."""
+    client = get_client()
+    content_blocks = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
+        for img in pdf_to_images_b64(chunk_bytes)
+    ]
+    content_blocks.append({"type": "text", "text": prompt})
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw = ""
+            chunk_count = 0
+            with client.messages.stream(
+                model=MODEL,
+                max_tokens=MAX_OUT_TOKENS,
+                thinking={"type": "between_tools"},   # thinking off: deterministic extraction, no thinking spend
+                messages=[{"role": "user", "content": content_blocks}]
+            ) as stream:
+                for text in stream.text_stream:
+                    raw += text
+                    chunk_count += 1
+                    if stream_status and chunk_count % 50 == 0:
+                        stream_status.caption(
+                            f"Receiving response (vision{chunk_label}), {chunk_count} chunks so far..."
+                        )
+                final_msg = stream.get_final_message()
+                input_tokens  = final_msg.usage.input_tokens
+                output_tokens = final_msg.usage.output_tokens
+                stop_reason   = final_msg.stop_reason
+            return raw, input_tokens, output_tokens, stop_reason
+
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = "429" in err_str or "rate_limit" in err_str
+            if is_rate_limit and attempt < max_retries:
+                wait_secs = 65
+                for remaining in range(wait_secs, 0, -1):
+                    if stream_status:
+                        stream_status.caption(
+                            f"Rate limit hit (vision{chunk_label}), retrying in {remaining}s "
+                            f"(attempt {attempt}/{max_retries})..."
+                        )
+                    time.sleep(1)
+            else:
+                raise
+
 def extract_transactions_vision(pdf_bytes, bank, stream_status=None):
     """
     Send PDF pages as images to Claude vision, in batches of VISION_CHUNK_SIZE pages
     (large scanned PDFs previously went up as one giant request and could fail or
     truncate silently).
+    A batch whose answer is unparseable, cut off, or holds no transactions is redone
+    one page at a time. One bad answer used to drop all four pages of a batch, and
+    the only sign on screen was "0 rows" in the coverage line.
     Returns (raw_rows, input_tokens, output_tokens, warnings, chunk_stats, balance_info).
     """
     client = get_client()
@@ -1030,84 +1083,67 @@ def extract_transactions_vision(pdf_bytes, bank, stream_status=None):
         raise ValueError("No API key configured")
 
     prompt = PROMPTS_VISION.get(bank, PROMPTS[bank]) + MULTI_STATEMENT_NOTE
-    chunks = split_pdf_bytes(pdf_bytes, VISION_CHUNK_SIZE)
+    queue = list(split_pdf_bytes(pdf_bytes, VISION_CHUNK_SIZE))
+    multi = len(queue) > 1
     all_rows, warnings, chunk_stats, balance_objs = [], [], [], []
     total_input = total_output = 0
-    max_retries = 3
+    ci = 0
 
-    for ci, (page_start, page_end, chunk_bytes) in enumerate(chunks):
-        chunk_label = f" (pages {page_start}–{page_end})" if len(chunks) > 1 else ""
-        images_b64 = pdf_to_images_b64(chunk_bytes)
-        content_blocks = [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
-            for img in images_b64
-        ]
-        content_blocks.append({"type": "text", "text": prompt})
+    while queue:
+        page_start, page_end, chunk_bytes = queue.pop(0)
+        n_pages = page_end - page_start + 1
+        label = f"pages {page_start} to {page_end}" if n_pages > 1 else f"page {page_start}"
+        chunk_label = f" ({label})" if multi else ""
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                raw = ""
-                chunk_count = 0
-                with client.messages.stream(
-                    model=MODEL,
-                    max_tokens=MAX_OUT_TOKENS,
-                    thinking={"type": "between_tools"},   # thinking off: deterministic extraction, no thinking spend
-                    messages=[{"role": "user", "content": content_blocks}]
-                ) as stream:
-                    for text in stream.text_stream:
-                        raw += text
-                        chunk_count += 1
-                        if stream_status and chunk_count % 50 == 0:
-                            stream_status.caption(
-                                f"Receiving response (vision{chunk_label}) — {chunk_count} chunks so far..."
-                            )
-                    final_msg = stream.get_final_message()
-                    input_tokens  = final_msg.usage.input_tokens
-                    output_tokens = final_msg.usage.output_tokens
-                    stop_reason   = final_msg.stop_reason
-                break  # success — exit retry loop
+        raw, inp, out, stop_reason = _call_claude_vision(chunk_bytes, prompt, stream_status, chunk_label)
+        total_input  += inp
+        total_output += out
 
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = "429" in err_str or "rate_limit" in err_str
-                if is_rate_limit and attempt < max_retries:
-                    wait_secs = 65
-                    for remaining in range(wait_secs, 0, -1):
-                        if stream_status:
-                            stream_status.caption(
-                                f"Rate limit hit (vision{chunk_label}) — retrying in {remaining}s "
-                                f"(attempt {attempt}/{max_retries})..."
-                            )
-                        time.sleep(1)
-                else:
-                    raise
-
-        total_input  += input_tokens
-        total_output += output_tokens
-
+        parse_error = None
         try:
             if stop_reason == "max_tokens":
                 rows = _salvage_truncated_json(raw)
-                warnings.append(
-                    f"Vision pages {page_start}–{page_end}: response hit the output token limit — "
-                    f"salvaged {len(rows)} rows, some rows on these pages may be missing."
-                )
             else:
                 rows = _parse_raw_json(raw)
         except Exception as e:
-            rows = []
-            warnings.append(f"Vision pages {page_start}–{page_end}: could not parse response — {e}")
+            rows, parse_error = [], e
 
-        txns = []
-        for r in rows:
-            if isinstance(r, dict) and r.get("balance_check"):
-                balance_objs.append((ci, r))     # balance summary object, not a transaction
-                continue
+        balances = [r for r in rows if isinstance(r, dict) and r.get("balance_check")]
+        txns     = [r for r in rows if not (isinstance(r, dict) and r.get("balance_check"))]
+
+        if n_pages > 1 and (parse_error or stop_reason == "max_tokens" or not txns):
+            if stream_status:
+                stream_status.caption(f"No usable answer for {label}, redoing them one page at a time...")
+            queue[0:0] = [
+                (page_start + s - 1, page_start + e - 1, b)
+                for s, e, b in split_pdf_bytes(chunk_bytes, 1)
+            ]
+            multi = True
+            continue
+
+        if parse_error:
+            warnings.append(f"Vision {label}: could not parse response. {parse_error}")
+        elif stop_reason == "max_tokens":
+            warnings.append(
+                f"Vision {label}: response hit the output token limit. "
+                f"Salvaged {len(txns)} rows, some rows on this page may be missing."
+            )
+
+        balance_objs.extend((ci, b) for b in balances)
+        for r in txns:
             if isinstance(r, dict):
                 r["_chunk"] = ci
-            txns.append(r)
-        chunk_stats.append((f"pages {page_start}–{page_end}", len(txns)))
+        chunk_stats.append((label, len(txns)))
         all_rows.extend(txns)
+        ci += 1
+
+    if len(chunk_stats) > 1:
+        zero = [lbl for lbl, n in chunk_stats if n == 0]
+        if zero and any(n > 0 for _, n in chunk_stats):
+            warnings.append(
+                "No transactions extracted from " + ", ".join(zero) +
+                " while other pages produced rows. Verify those pages in the PDF."
+            )
 
     # ── Opening/closing balances reported by the model (for the balance check) ──
     opening = closing = None
